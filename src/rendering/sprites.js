@@ -31,6 +31,25 @@ export function glowSprite(color, size = 128) {
   return c;
 }
 
+/** Soft, fully blended contact shadow (dark centre fading to transparent). */
+export function shadowSprite(size = 128) {
+  const key = `shadow:${size}`;
+  let c = cache.get(key);
+  if (c) return c;
+  c = makeCanvas(size);
+  const g = c.getContext('2d');
+  const r = size / 2;
+  const grad = g.createRadialGradient(r, r, 0, r, r, r);
+  grad.addColorStop(0, 'rgba(0,0,10,0.85)');
+  grad.addColorStop(0.35, 'rgba(0,0,10,0.5)');
+  grad.addColorStop(0.7, 'rgba(0,0,10,0.15)');
+  grad.addColorStop(1, 'rgba(0,0,10,0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, size, size);
+  cache.set(key, c);
+  return c;
+}
+
 /** Shaded sphere body: bright core, coloured rim. */
 export function ballSprite(core, rim, size = 128) {
   const key = `ball:${core}:${rim}:${size}`;

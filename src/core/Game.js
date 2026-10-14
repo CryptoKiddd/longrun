@@ -12,6 +12,7 @@ import { GhostPlayback } from '../systems/GhostSystem.js';
 import { Renderer, PALETTE, PC, tierColor } from '../rendering/Renderer.js';
 import { HUD, formatInt } from '../ui/HUD.js';
 import { UI } from '../ui/UI.js';
+import { loadFonts } from '../ui/fonts.js';
 import { createPlatformAdapter } from '../platform/PlatformAdapter.js';
 
 const SAVE_KEY = 'pulse-one-more-run.v1';
@@ -88,7 +89,8 @@ export class Game {
     this.win.addEventListener('pointerdown', unlock, { once: true, capture: true });
     this.win.addEventListener('keydown', unlock, { once: true, capture: true });
 
-    await this.platform.init().catch(() => null);
+    // Bundled fonts (local files); never blocks startup for more than ~1.5 s.
+    await Promise.all([loadFonts(this.doc), this.platform.init().catch(() => null)]);
 
     this.sim.reset(randomSeed());
     this.fsm.transition(State.READY);
@@ -165,7 +167,6 @@ export class Game {
   pause() {
     if (!this.fsm.transition(State.PAUSED)) return;
     this.input.clear();
-    this.audio.setEngine(false, 0);
     this.ui.show('pause');
     this.platform.gameplayStop();
   }
@@ -182,7 +183,6 @@ export class Game {
 
   toMenu() {
     if (!this.fsm.transition(State.READY)) return;
-    this.audio.setEngine(false, 0);
     this.sim.reset(randomSeed());
     this.particles.clear();
     this.resetVisuals();
@@ -197,8 +197,6 @@ export class Game {
     const p = sim.player;
     const fx = !this.progression.settings.reducedEffects;
     const skin = this.progression.skin;
-
-    this.audio.setEngine(false, 0);
     this.audio.crash();
     if (sim.crashCause === 'obstacle') {
       this.particles.burst(p.x, p.y + p.radius, p.z, 46, 9, 0.9, 0.5, PC.WHITE, p.vz * 0.15, 10);
@@ -297,12 +295,18 @@ export class Game {
         case 'jump':
           this.audio.jump();
           this.jumpedThisRun = true;
-          this.particles.burst(p.x, 0.05, p.z, 6, 2, 0.35, 0.3, PC.CYAN, p.vz * 0.6);
+          this.particles.burst(p.x, p.y + 0.05, p.z, 6, 2, 0.35, 0.3, PC.CYAN, p.vz * 0.6);
+          break;
+        case 'launch':
+          this.audio.launch();
+          this.particles.burst(p.x, p.y + 0.1, p.z, 14, 3, 0.5, 0.35, PC.WHITE, p.vz * 0.7);
+          if (fx) this.shake = Math.max(this.shake, 0.12);
           break;
         case 'land':
           this.squash = Math.min(1, n.speed / 8);
           this.audio.land(this.squash);
-          this.particles.burst(p.x, 0.05, p.z, 8, 2.5, 0.35, 0.3, PC.CYAN, p.vz * 0.6);
+          this.particles.burst(p.x, p.y + 0.05, p.z, 8 + Math.round(this.squash * 10), 2.5 + this.squash * 3, 0.35, 0.3, PC.CYAN, p.vz * 0.6);
+          if (fx && this.squash > 0.6) this.shake = Math.max(this.shake, 0.2 * this.squash);
           break;
         case 'rail':
           this.audio.rail();
@@ -390,13 +394,14 @@ export class Game {
     if (state === State.READY) {
       // Attract mode: idle hover on the start line.
       px = Math.sin(this.time * 0.6) * 0.8;
-      py = 0;
+      py = sim.track.heightAt(pz);
     }
 
     // Visual-only timers.
     this.particles.update(dt);
     for (const t of this.texts) if (t.life > 0) t.life -= dt;
     for (const g of sim.track.gates) if (g.flash > 0) g.flash = Math.max(0, g.flash - dt * 2.5);
+    for (const o of sim.track.obstacles) if (o.hitFlash > 0) o.hitFlash = Math.max(0, o.hitFlash - dt * 3);
     this.shake = Math.max(0, this.shake - dt * 2.2);
     this.flash = Math.max(0, this.flash - dt * 1.6);
     this.squash = Math.max(0, this.squash - dt * 5);
@@ -418,10 +423,9 @@ export class Game {
     if (playing) {
       this.pushTrail(px, py, pz);
       this.spawnSpeedDust(dt, pz, p.vz);
-      this.audio.setEngine(true, (p.vz - SPEED.MIN) / (SPEED.MAX - SPEED.MIN));
     }
 
-    this.renderer.camera.follow(px, py, pz, dt, state === State.READY);
+    this.renderer.camera.follow(px, py, pz, dt, state === State.READY, sim.track);
 
     // Ghost of the best run (same distance as the player).
     if (playing && this.progression.settings.ghost) this.ghost.sample(pz);
@@ -433,6 +437,7 @@ export class Game {
     v.px = px;
     v.py = py + this.fallOffset;
     v.pz = pz;
+    v.groundY = sim.track.heightAt(pz);
     v.playerMarker.z = pz;
     v.skin = this.progression.skin;
     v.reducedEffects = !fx;
@@ -487,7 +492,8 @@ export class Game {
     while (this.dustTimer <= 0) {
       this.dustTimer += rate;
       const side = Math.random() < 0.5 ? -1 : 1;
-      this.particles.spawn(side * (TRACK.HALF_WIDTH + 1 + Math.random() * 7), -2 + Math.random() * 6, pz + 30 + Math.random() * 50, 0, 0, 0, 6, 0.12, Math.random() < 0.7 ? PC.VIOLET : PC.CYAN);
+      const dz = pz + 30 + Math.random() * 50;
+      this.particles.spawn(side * (TRACK.HALF_WIDTH + 1 + Math.random() * 7), this.sim.track.heightAt(dz) - 2 + Math.random() * 6, dz, 0, 0, 0, 6, 0.12, Math.random() < 0.7 ? PC.VIOLET : PC.CYAN);
     }
   }
 

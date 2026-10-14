@@ -1,21 +1,24 @@
 import { RENDER, TRACK } from '../config.js';
 import { GATE_HEIGHT, GATE_POST_WIDTH } from '../world/Track.js';
 import { Camera } from './Camera.js';
-import { glowSprite, ballSprite, withAlpha, mix, hslToHex } from './sprites.js';
+import { glowSprite, ballSprite, shadowSprite, withAlpha, mix, hslToHex } from './sprites.js';
+import { FONT_DISPLAY } from '../ui/fonts.js';
 
 /**
  * Canvas 2D pseudo-3D renderer. A read-only view of the simulation:
  * it interpolates and projects, but never writes gameplay state.
+ * Heights of obstacles/orbs are relative to the terrain; the renderer adds
+ * the local surface height when projecting.
  */
 
 export const PALETTE = Object.freeze({
-  skyTop: '#02040f',
-  skyMid: '#071033',
-  horizon: '#1b1250',
-  void: '#03050f',
-  trackA: '#0d1a47',
-  trackB: '#0a1539',
-  fog: '#140f3c',
+  skyTop: '#02030b',
+  skyMid: '#070b26',
+  horizon: '#1d0f45',
+  void: '#02030a',
+  trackA: '#0c1640',
+  trackB: '#0a1335',
+  fog: '#150d3a',
   rail: '#22e4ff',
   lane: '#3b5bd6',
   danger: '#ff2e88',
@@ -36,8 +39,11 @@ const PARTICLE_COLORS = ['#22e4ff', '#ffc23d', '#ff2e88', '#a77bff', '#ffffff', 
 export const PC = Object.freeze({ CYAN: 0, AMBER: 1, MAGENTA: 2, VIOLET: 3, WHITE: 4, ORANGE: 5 });
 
 const FAR = TRACK.VIEW_AHEAD;
-const MAX_SLICES = Math.ceil(FAR / RENDER.SLICE) + 4;
+const MAX_SLICES = Math.ceil(FAR / RENDER.SLICE) + 24;
 const QUALITY_SCALE = [0.7, 0.85, 1];
+const RAIL_BUCKETS = 4;
+const RAIL_ALPHA = [1, 0.62, 0.32, 0.12];
+const H = TRACK.HALF_WIDTH;
 
 function pt() {
   return { x: 0, y: 0, s: 0, visible: false };
@@ -57,17 +63,25 @@ export class Renderer {
     this.P = Array.from({ length: 12 }, pt);
     this.q = pt();
     this.list = [];
-    this.sliceZ = new Float32Array(MAX_SLICES);
-    this.sliceL = new Float32Array(MAX_SLICES);
-    this.sliceR = new Float32Array(MAX_SLICES);
-    this.sliceY = new Float32Array(MAX_SLICES);
-    this.sliceS = new Float32Array(MAX_SLICES);
-    this.stars = this.makeStars(140);
+    // Slice boundaries (far -> near). Far edge of a quad uses the left-limit
+    // height (yB); near edge uses the right-limit height (yA): this keeps
+    // drop-offs and ramp lips crisp.
+    this.sZ = new Float64Array(MAX_SLICES);
+    this.sLA = new Float32Array(MAX_SLICES);
+    this.sRA = new Float32Array(MAX_SLICES);
+    this.sYA = new Float32Array(MAX_SLICES);
+    this.sLB = new Float32Array(MAX_SLICES);
+    this.sRB = new Float32Array(MAX_SLICES);
+    this.sYB = new Float32Array(MAX_SLICES);
+    this.sS = new Float32Array(MAX_SLICES);
+    this.sCount = 0;
+    this.stars = this.makeStars(150);
     this.ridge = this.makeRidge();
     this.trackColors = this.buildTrackPalette();
     this.particleSprites = PARTICLE_COLORS.map((c) => glowSprite(c, 64));
     this.orbGlow = glowSprite(PALETTE.orb, 96);
     this.orbCore = ballSprite('#fff4d0', '#ffb02e', 64);
+    this.shadow = shadowSprite(128);
   }
 
   // ---- setup ------------------------------------------------------------
@@ -84,8 +98,7 @@ export class Renderer {
     const pts = [];
     let s = 777;
     const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
-    const n = 48;
-    for (let i = 0; i <= n; i++) pts.push(0.15 + rnd() * 0.85 * (0.5 + 0.5 * Math.sin(i * 0.7)));
+    for (let i = 0; i <= 48; i++) pts.push(0.15 + rnd() * 0.85 * (0.5 + 0.5 * Math.sin(i * 0.7)));
     return pts;
   }
 
@@ -93,11 +106,11 @@ export class Renderer {
     const out = {};
     for (const theme of Object.keys(THEME_TINT)) {
       const tint = THEME_TINT[theme];
-      const a = tint ? mix(PALETTE.trackA, tint, 0.45) : PALETTE.trackA;
-      const b = tint ? mix(PALETTE.trackB, tint, 0.45) : PALETTE.trackB;
+      const a = tint ? mix(PALETTE.trackA, tint, 0.4) : PALETTE.trackA;
+      const b = tint ? mix(PALETTE.trackB, tint, 0.4) : PALETTE.trackB;
       const levels = [[], []];
       for (let i = 0; i < FOG_LEVELS; i++) {
-        const t = i / (FOG_LEVELS - 1);
+        const t = Math.pow(i / (FOG_LEVELS - 1), 0.8);
         levels[0].push(mix(a, PALETTE.fog, t));
         levels[1].push(mix(b, PALETTE.fog, t));
       }
@@ -127,12 +140,13 @@ export class Renderer {
     this.skyGrad.addColorStop(Math.min(0.95, (hz / this.cssH) * 0.7), PALETTE.skyMid);
     this.skyGrad.addColorStop(Math.min(0.99, hz / this.cssH), PALETTE.horizon);
     this.skyGrad.addColorStop(1, PALETTE.void);
-    this.horizonGrad = ctx.createLinearGradient(0, hz - 90, 0, hz + 8);
+    this.horizonGrad = ctx.createLinearGradient(0, hz - 110, 0, hz + 10);
     this.horizonGrad.addColorStop(0, 'rgba(167,123,255,0)');
-    this.horizonGrad.addColorStop(1, 'rgba(167,123,255,0.28)');
+    this.horizonGrad.addColorStop(0.7, 'rgba(200,90,255,0.16)');
+    this.horizonGrad.addColorStop(1, 'rgba(255,80,190,0.3)');
     this.vignette = ctx.createRadialGradient(this.cssW / 2, this.cssH * 0.55, Math.min(this.cssW, this.cssH) * 0.35, this.cssW / 2, this.cssH * 0.55, Math.max(this.cssW, this.cssH) * 0.8);
     this.vignette.addColorStop(0, 'rgba(0,0,0,0)');
-    this.vignette.addColorStop(1, 'rgba(0,0,8,0.55)');
+    this.vignette.addColorStop(1, 'rgba(0,0,8,0.6)');
   }
 
   setQuality(level) {
@@ -145,9 +159,7 @@ export class Renderer {
 
   // ---- frame ------------------------------------------------------------
 
-  /**
-   * @param {object} v view model assembled by Game (see Game.buildView)
-   */
+  /** @param {object} v view model assembled by Game (see Game.frameUpdate) */
   render(v) {
     const ctx = this.ctx;
     const cam = this.camera;
@@ -156,20 +168,20 @@ export class Renderer {
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
 
-    this.drawSky(v.time);
-
     ctx.save();
     if (v.shake > 0) ctx.translate(v.shakeX, v.shakeY);
     if (v.bank) {
-      const pivotY = cam.horizon;
-      ctx.translate(cam.cx, pivotY);
+      ctx.translate(cam.cx, cam.horizon);
       ctx.rotate(v.bank);
-      ctx.translate(-cam.cx, -pivotY);
+      ctx.translate(-cam.cx, -cam.horizon);
     }
+    this.drawSky(v.time);
     if (this.quality > 0) this.drawVoidGrid();
-    this.drawTrack(v);
+    this.buildSlices(v.track);
+    this.drawTrack(v.track);
     this.drawHoles(v.track);
-    if (v.bestDistance > 50) this.drawBestMarker(v.bestDistance);
+    this.drawLips(v.track);
+    if (v.bestDistance > 50) this.drawBestMarker(v.track, v.bestDistance);
     this.drawObjects(v);
     this.drawParticles(v.particles);
     this.drawTexts(v.texts);
@@ -191,27 +203,26 @@ export class Renderer {
     const ctx = this.ctx;
     const cam = this.camera;
     const w = this.cssW;
+    const shiftY = cam.horizonEff - cam.horizon;
+    ctx.save();
+    ctx.translate(0, shiftY);
     ctx.fillStyle = this.skyGrad;
-    ctx.fillRect(0, 0, w, this.cssH);
+    ctx.fillRect(-60, -Math.abs(shiftY) - 60, w + 120, this.cssH + 2 * Math.abs(shiftY) + 120);
 
-    // Stars drift opposite to the (cosmetic) curve for a sense of turning.
     const shift = -cam.curve0 * 2.2 - cam.x * 3;
     ctx.fillStyle = '#cfe3ff';
     for (const s of this.stars) {
       let x = (s.x * w + shift) % w;
       if (x < 0) x += w;
-      const y = s.y * cam.horizon * 0.95;
       ctx.globalAlpha = s.a * (0.75 + 0.25 * Math.sin(time * 1.3 + s.tw));
-      ctx.fillRect(x, y, s.r, s.r);
+      ctx.fillRect(x, s.y * cam.horizon * 0.95, s.r, s.r);
     }
     ctx.globalAlpha = 1;
 
-    // Horizon glow.
     const hz = cam.horizon;
     ctx.fillStyle = this.horizonGrad;
-    ctx.fillRect(0, hz - 90, w, 98);
+    ctx.fillRect(-60, hz - 110, w + 120, 120);
 
-    // Distant ridge silhouette with a neon edge (parallax with the curve).
     const n = this.ridge.length - 1;
     const span = w * 1.5;
     let off = (-cam.curve0 * 1.1 - cam.x * 1.5) % span;
@@ -219,26 +230,21 @@ export class Renderer {
     ctx.beginPath();
     ctx.moveTo(off, hz);
     for (let rep = 0; rep < 3; rep++) {
-      for (let i = 0; i <= n; i++) {
-        const x = off + rep * span + (i / n) * span;
-        ctx.lineTo(x, hz - this.ridge[i] * 46);
-      }
+      for (let i = 0; i <= n; i++) ctx.lineTo(off + rep * span + (i / n) * span, hz - this.ridge[i] * 46);
     }
     ctx.lineTo(off + 3 * span, hz);
     ctx.closePath();
-    ctx.fillStyle = '#0a0a2a';
+    ctx.fillStyle = '#07061c';
     ctx.fill();
-    ctx.strokeStyle = 'rgba(167,123,255,0.45)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
+    ctx.restore();
   }
 
   drawVoidGrid() {
     const ctx = this.ctx;
     const cam = this.camera;
     const P = this.P;
-    const y = -16;
-    ctx.strokeStyle = 'rgba(110,80,255,0.13)';
+    const y = cam.y - 26;
+    ctx.strokeStyle = 'rgba(110,80,255,0.1)';
     ctx.lineWidth = 1;
     ctx.beginPath();
     const z0 = Math.ceil((cam.z + 6) / 14) * 14;
@@ -251,10 +257,9 @@ export class Renderer {
     }
     const base = Math.round(cam.x / 10) * 10;
     for (let k = -9; k <= 9; k++) {
-      const x = base + k * 10;
       let first = true;
       for (const dz of [6, 14, 30, 60, 110, FAR]) {
-        cam.project(x, y, cam.z + dz, P[0]);
+        cam.project(base + k * 10, y, cam.z + dz, P[0]);
         if (first) ctx.moveTo(P[0].x, P[0].y);
         else ctx.lineTo(P[0].x, P[0].y);
         first = false;
@@ -267,7 +272,7 @@ export class Renderer {
   neon(color, width, alpha = 1) {
     const ctx = this.ctx;
     if (this.quality > 0) {
-      ctx.globalAlpha = alpha * 0.22;
+      ctx.globalAlpha = alpha * 0.2;
       ctx.strokeStyle = color;
       ctx.lineWidth = width * 3.2;
       ctx.stroke();
@@ -279,83 +284,154 @@ export class Renderer {
     ctx.globalAlpha = 1;
   }
 
-  drawTrack(v) {
-    const ctx = this.ctx;
+  // ---- track ------------------------------------------------------------
+
+  /** Project slice boundaries far -> near, splitting at drop-offs. */
+  buildSlices(track) {
     const cam = this.camera;
-    const H = TRACK.HALF_WIDTH;
-    const track = v.track;
+    const terrain = track.terrain;
     const S = RENDER.SLICE;
     const nearZ = cam.z + cam.near + 0.05;
-    let zFar = Math.floor((cam.z + FAR) / S) * S;
-
-    // Project slice boundaries far -> near.
-    let n = 0;
     const P = this.P;
-    for (let z = zFar; n < MAX_SLICES; z -= S) {
-      const zz = Math.max(z, nearZ);
-      cam.project(-H, 0, zz, P[0]);
-      cam.project(H, 0, zz, P[1]);
-      this.sliceZ[n] = zz;
-      this.sliceL[n] = P[0].x;
-      this.sliceR[n] = P[1].x;
-      this.sliceY[n] = P[0].y;
-      this.sliceS[n] = P[0].s;
+    let n = 0;
+    let dropIdx = terrain.drops.length - 1;
+    const push = (z) => {
+      const yB = terrain.heightBefore(z);
+      const yA = terrain.heightAt(z);
+      cam.project(-H, yA, z, P[0]);
+      cam.project(H, yA, z, P[1]);
+      this.sZ[n] = z;
+      this.sLA[n] = P[0].x;
+      this.sRA[n] = P[1].x;
+      this.sYA[n] = P[0].y;
+      this.sS[n] = P[0].s;
+      if (yB !== yA) {
+        cam.project(-H, yB, z, P[0]);
+        cam.project(H, yB, z, P[1]);
+      }
+      this.sLB[n] = P[0].x;
+      this.sRB[n] = P[1].x;
+      this.sYB[n] = P[0].y;
       n++;
+    };
+    let z = Math.floor((cam.z + FAR) / S) * S;
+    while (n < MAX_SLICES - 2) {
+      const zz = Math.max(z, nearZ);
+      // Insert any drop-offs between the previous boundary and this one.
+      while (dropIdx >= 0 && terrain.drops[dropIdx].z > zz) {
+        const dz = terrain.drops[dropIdx].z;
+        if (dz < cam.z + FAR && (n === 0 || dz < this.sZ[n - 1])) push(dz);
+        dropIdx--;
+      }
+      push(zz);
       if (zz <= nearZ) break;
+      z -= S;
     }
+    this.sCount = n;
+  }
+
+  drawTrack(track) {
+    const ctx = this.ctx;
+    const cam = this.camera;
+    const n = this.sCount;
+    const S = RENDER.SLICE;
 
     // Surface quads with stripes, distance fog and zone tint.
     for (let i = 0; i < n - 1; i++) {
-      const zf = this.sliceZ[i];
-      const zn = this.sliceZ[i + 1];
-      const dz = zf - cam.z;
-      const fog = Math.max(0, Math.min(1, (dz - 35) / (FAR - 35)));
-      const theme = track.themeAt(zn);
-      const palette = this.trackColors[theme] || this.trackColors[''];
+      const zf = this.sZ[i];
+      const zn = this.sZ[i + 1];
+      if (zf - zn < 1e-6) continue;
+      const fog = Math.max(0, Math.min(1, (zf - cam.z - 30) / (FAR - 30)));
+      const palette = this.trackColors[track.themeAt(zn)] || this.trackColors[''];
       const stripe = Math.floor(zn / (S * 3)) & 1;
       ctx.fillStyle = palette[stripe][Math.round(fog * (FOG_LEVELS - 1))];
       ctx.beginPath();
-      ctx.moveTo(this.sliceL[i], this.sliceY[i]);
-      ctx.lineTo(this.sliceR[i], this.sliceY[i]);
-      ctx.lineTo(this.sliceR[i + 1], this.sliceY[i + 1] + 0.5);
-      ctx.lineTo(this.sliceL[i + 1], this.sliceY[i + 1] + 0.5);
+      ctx.moveTo(this.sLB[i], this.sYB[i]);
+      ctx.lineTo(this.sRB[i], this.sYB[i]);
+      ctx.lineTo(this.sRA[i + 1], this.sYA[i + 1] + 0.6);
+      ctx.lineTo(this.sLA[i + 1], this.sYA[i + 1] + 0.6);
       ctx.closePath();
       ctx.fill();
     }
 
-    // Lane dashes and cross lines.
+    // Lane dashes.
     ctx.beginPath();
     for (let i = 0; i < n - 1; i++) {
-      if (Math.floor(this.sliceZ[i + 1] / 4) & 1) continue;
+      if (Math.floor(this.sZ[i + 1] / 4) & 1) continue;
       for (const f of [1 / 3, 2 / 3]) {
-        ctx.moveTo(this.sliceL[i] + (this.sliceR[i] - this.sliceL[i]) * f, this.sliceY[i]);
-        ctx.lineTo(this.sliceL[i + 1] + (this.sliceR[i + 1] - this.sliceL[i + 1]) * f, this.sliceY[i + 1]);
+        ctx.moveTo(this.sLB[i] + (this.sRB[i] - this.sLB[i]) * f, this.sYB[i]);
+        ctx.lineTo(this.sLA[i + 1] + (this.sRA[i + 1] - this.sLA[i + 1]) * f, this.sYA[i + 1]);
       }
     }
-    ctx.strokeStyle = withAlpha(PALETTE.lane, 0.35);
+    ctx.strokeStyle = withAlpha(PALETTE.lane, 0.28);
     ctx.lineWidth = 1;
     ctx.stroke();
 
-    ctx.beginPath();
-    for (let i = 0; i < n; i++) {
-      if (Math.abs(this.sliceZ[i] % 12) > 0.01) continue;
-      ctx.moveTo(this.sliceL[i], this.sliceY[i]);
-      ctx.lineTo(this.sliceR[i], this.sliceY[i]);
-    }
-    ctx.strokeStyle = withAlpha(PALETTE.rail, 0.12);
-    ctx.stroke();
+    this.drawRails();
+  }
 
-    // Side rails.
-    ctx.beginPath();
-    for (let i = 0; i < n; i++) {
-      if (i === 0) ctx.moveTo(this.sliceL[i], this.sliceY[i]);
-      else ctx.lineTo(this.sliceL[i], this.sliceY[i]);
+  /**
+   * Edges as soft light bands in world units (perspective-correct width),
+   * fading with distance and blended additively — no hard outlines.
+   */
+  drawRails() {
+    const ctx = this.ctx;
+    const cam = this.camera;
+    const n = this.sCount;
+    const bands = this.quality > 0
+      ? [
+          [-0.7, 0, 0.05], // halo spilling into the void
+          [0, 0.75, 0.07], // inner glow on the deck
+          [0, 0.14, 0.42], // bright edge core
+        ]
+      : [[0, 0.14, 0.45]];
+    ctx.globalCompositeOperation = 'lighter';
+    for (let b = 0; b < RAIL_BUCKETS; b++) {
+      for (const [inA, inB, alpha] of bands) {
+        ctx.beginPath();
+        let any = false;
+        for (let i = 0; i < n - 1; i++) {
+          const dz = this.sZ[i] - cam.z;
+          const bucket = Math.min(RAIL_BUCKETS - 1, Math.floor((dz / FAR) * RAIL_BUCKETS * 1.15));
+          if (bucket !== b || this.sZ[i] - this.sZ[i + 1] < 1e-6) continue;
+          any = true;
+          // Interpolate band edges across the deck (fraction of full width).
+          const fa = inA / (2 * H);
+          const fb = inB / (2 * H);
+          for (const side of [0, 1]) {
+            const lF = side ? this.sRB[i] : this.sLB[i];
+            const wF = (this.sRB[i] - this.sLB[i]) * (side ? -1 : 1);
+            const lN = side ? this.sRA[i + 1] : this.sLA[i + 1];
+            const wN = (this.sRA[i + 1] - this.sLA[i + 1]) * (side ? -1 : 1);
+            ctx.moveTo(lF + wF * fa, this.sYB[i]);
+            ctx.lineTo(lF + wF * fb, this.sYB[i]);
+            ctx.lineTo(lN + wN * fb, this.sYA[i + 1] + 0.5);
+            ctx.lineTo(lN + wN * fa, this.sYA[i + 1] + 0.5);
+            ctx.closePath();
+          }
+        }
+        if (!any) continue;
+        ctx.fillStyle = withAlpha(PALETTE.rail, alpha * RAIL_ALPHA[b]);
+        ctx.fill();
+      }
     }
-    for (let i = 0; i < n; i++) {
-      if (i === 0) ctx.moveTo(this.sliceR[i], this.sliceY[i]);
-      else ctx.lineTo(this.sliceR[i], this.sliceY[i]);
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  /** Bright edge where the deck ends at a ramp lip or drop-off. */
+  drawLips(track) {
+    const cam = this.camera;
+    const P = this.P;
+    const ctx = this.ctx;
+    for (const d of track.terrain.drops) {
+      if (d.z < cam.z + cam.near + 0.2 || d.z > cam.z + FAR) continue;
+      cam.project(-H, d.high, d.z, P[0]);
+      cam.project(H, d.high, d.z, P[1]);
+      ctx.beginPath();
+      ctx.moveTo(P[0].x, P[0].y);
+      ctx.lineTo(P[1].x, P[1].y);
+      this.neon(PALETTE.perfect, Math.max(1.5, P[0].s * 0.05), this.fade(d.z));
     }
-    this.neon(PALETTE.rail, 2, 0.9);
   }
 
   drawHoles(track) {
@@ -368,54 +444,56 @@ export class Renderer {
       const zA = Math.max(h.z0, nearZ);
       const zB = Math.min(h.z1, cam.z + FAR);
       const steps = Math.max(1, Math.ceil((zB - zA) / 3));
-      // Void polygon following the cosmetic curve.
+      const yAt = (z) => track.heightAt(z);
       ctx.beginPath();
       for (let k = 0; k <= steps; k++) {
         const z = zA + ((zB - zA) * k) / steps;
-        cam.project(h.x0, 0, z, P[0]);
+        cam.project(h.x0, yAt(z), z, P[0]);
         if (k === 0) ctx.moveTo(P[0].x, P[0].y);
         else ctx.lineTo(P[0].x, P[0].y);
       }
       for (let k = steps; k >= 0; k--) {
         const z = zA + ((zB - zA) * k) / steps;
-        cam.project(h.x1, 0, z, P[0]);
+        cam.project(h.x1, yAt(z), z, P[0]);
         ctx.lineTo(P[0].x, P[0].y);
       }
       ctx.closePath();
       ctx.fillStyle = PALETTE.void;
       ctx.fill();
 
-      // Far wall of the gap (track thickness), visible from the camera.
-      cam.project(h.x0, 0, zB, P[1]);
-      cam.project(h.x1, 0, zB, P[2]);
-      cam.project(h.x1, -1.4, zB, P[3]);
-      cam.project(h.x0, -1.4, zB, P[4]);
+      // Far wall of the gap (deck thickness), visible from the camera.
+      const yb = yAt(zB);
+      cam.project(h.x0, yb, zB, P[1]);
+      cam.project(h.x1, yb, zB, P[2]);
+      cam.project(h.x1, yb - 1.4, zB, P[3]);
+      cam.project(h.x0, yb - 1.4, zB, P[4]);
       ctx.beginPath();
       ctx.moveTo(P[1].x, P[1].y);
       ctx.lineTo(P[2].x, P[2].y);
       ctx.lineTo(P[3].x, P[3].y);
       ctx.lineTo(P[4].x, P[4].y);
       ctx.closePath();
-      ctx.fillStyle = '#1a0d33';
+      ctx.fillStyle = '#170b2e';
       ctx.fill();
       ctx.beginPath();
       ctx.moveTo(P[1].x, P[1].y);
       ctx.lineTo(P[2].x, P[2].y);
       this.neon(PALETTE.danger, 2);
 
-      // Near edge + side edges in danger colour.
+      // Near edge + inner side edges in danger colour.
       ctx.beginPath();
       if (h.z0 >= nearZ) {
-        cam.project(h.x0, 0, h.z0, P[5]);
-        cam.project(h.x1, 0, h.z0, P[6]);
+        const y0 = track.terrain.heightBefore(h.z0);
+        cam.project(h.x0, y0, h.z0, P[5]);
+        cam.project(h.x1, y0, h.z0, P[6]);
         ctx.moveTo(P[5].x, P[5].y);
         ctx.lineTo(P[6].x, P[6].y);
       }
       for (const x of [h.x0, h.x1]) {
-        if (Math.abs(Math.abs(x) - TRACK.HALF_WIDTH) < 0.01) continue;
+        if (Math.abs(Math.abs(x) - H) < 0.01) continue;
         for (let k = 0; k <= steps; k++) {
           const z = zA + ((zB - zA) * k) / steps;
-          cam.project(x, 0, z, P[0]);
+          cam.project(x, yAt(z), z, P[0]);
           if (k === 0) ctx.moveTo(P[0].x, P[0].y);
           else ctx.lineTo(P[0].x, P[0].y);
         }
@@ -428,10 +506,10 @@ export class Renderer {
       const half = Math.min(1.2, (h.x1 - h.x0) / 2 - 0.2);
       for (let k = 1; k <= 3; k++) {
         const z = h.z0 - k * 3;
-        if (z < nearZ) continue;
-        cam.project(cx - half, 0, z - 1, P[7]);
-        cam.project(cx, 0, z, P[8]);
-        cam.project(cx + half, 0, z - 1, P[9]);
+        if (z - 1 < nearZ) continue;
+        cam.project(cx - half, yAt(z - 1), z - 1, P[7]);
+        cam.project(cx, yAt(z), z, P[8]);
+        cam.project(cx + half, yAt(z - 1), z - 1, P[9]);
         ctx.moveTo(P[7].x, P[7].y);
         ctx.lineTo(P[8].x, P[8].y);
         ctx.lineTo(P[9].x, P[9].y);
@@ -440,22 +518,22 @@ export class Renderer {
     }
   }
 
-  drawBestMarker(zBest) {
+  drawBestMarker(track, zBest) {
     const cam = this.camera;
     const P = this.P;
     if (zBest < cam.z + cam.near + 0.5 || zBest > cam.z + FAR) return;
-    const ctx = this.ctx;
     const alpha = Math.max(0, Math.min(1, (90 - (zBest - cam.z)) / 30));
     if (alpha <= 0) return;
-    const H = TRACK.HALF_WIDTH;
-    cam.project(-H, 0, zBest, P[0]);
-    cam.project(H, 0, zBest, P[1]);
+    const ctx = this.ctx;
+    const y = track.heightAt(zBest);
+    cam.project(-H, y, zBest, P[0]);
+    cam.project(H, y, zBest, P[1]);
     ctx.beginPath();
     ctx.moveTo(P[0].x, P[0].y);
     ctx.lineTo(P[1].x, P[1].y);
     this.neon(PALETTE.orb, 2.5, alpha);
     const size = Math.max(10, Math.min(22, P[0].s * 0.45));
-    ctx.font = `700 ${size}px system-ui, sans-serif`;
+    ctx.font = `italic 800 ${size}px ${FONT_DISPLAY}`;
     ctx.textAlign = 'center';
     ctx.globalAlpha = alpha;
     ctx.fillStyle = PALETTE.orb;
@@ -480,9 +558,9 @@ export class Renderer {
 
     for (const o of list) {
       if (o === v.playerMarker) this.drawPlayer(v);
-      else if (o.kind !== undefined) this.drawBox(o, v.time);
-      else if (o.collected !== undefined) this.drawOrb(o, v.time);
-      else this.drawGateFrame(o);
+      else if (o.kind !== undefined) this.drawBox(track, o, v.time);
+      else if (o.collected !== undefined) this.drawOrb(track, o, v.time);
+      else this.drawGateFrame(track, o);
     }
   }
 
@@ -491,19 +569,19 @@ export class Renderer {
     return Math.max(0, Math.min(1, (FAR - dz) / 30));
   }
 
-  drawBox(o, time) {
+  drawBox(track, o, time) {
     const cam = this.camera;
     const nearZ = cam.z + cam.near + 0.02;
     const alpha = this.fade(o.z0);
     if (alpha <= 0) return;
     let color = PALETTE.danger;
-    let fillA = 0.22;
+    let fillA = 0.24;
     if (o.kind === 'hurdle') {
       color = PALETTE.dangerSoft;
       fillA = 0.5;
     } else if (o.kind === 'mover') {
       color = PALETTE.mover;
-      fillA = 0.4;
+      fillA = 0.42;
     } else if (o.kind === 'post') {
       const g = o.gate;
       color = g && g.resolved ? tierColor(g.result) : PALETTE.gate;
@@ -512,30 +590,30 @@ export class Renderer {
     if (o.hitFlash > 0) color = PALETTE.white;
     const x0 = o.x - o.w / 2;
     const x1 = o.x + o.w / 2;
-    // Long boxes are split so their edges follow the cosmetic curve.
     const zEnd = o.z1;
     const zStart = Math.max(o.z0, nearZ);
     if (zEnd <= zStart) return;
+    // Split long boxes so they follow the cosmetic curve and the terrain.
     const chunks = Math.max(1, Math.ceil((zEnd - zStart) / 4));
     for (let c = chunks - 1; c >= 0; c--) {
       const za = zStart + ((zEnd - zStart) * c) / chunks;
       const zb = zStart + ((zEnd - zStart) * (c + 1)) / chunks;
-      this.drawBoxChunk(x0, x1, o.h, za, zb, color, fillA * alpha, alpha, c === 0, o.kind === 'mover' ? time : -1);
+      this.drawBoxChunk(x0, x1, o.h, za, zb, track.heightAt(za), track.heightAt(zb), color, fillA * alpha, alpha, c === 0, o.kind === 'mover' ? time : -1);
     }
   }
 
-  drawBoxChunk(x0, x1, h, zn, zf, color, fillA, alpha, front, pulseTime) {
+  drawBoxChunk(x0, x1, h, zn, zf, bn, bf, color, fillA, alpha, front, pulseTime) {
     const ctx = this.ctx;
     const cam = this.camera;
     const P = this.P;
-    const nTL = cam.project(x0, h, zn, P[0]);
-    const nTR = cam.project(x1, h, zn, P[1]);
-    const nBR = cam.project(x1, 0, zn, P[2]);
-    const nBL = cam.project(x0, 0, zn, P[3]);
-    const fTL = cam.project(x0, h, zf, P[4]);
-    const fTR = cam.project(x1, h, zf, P[5]);
-    const fBR = cam.project(x1, 0, zf, P[6]);
-    const fBL = cam.project(x0, 0, zf, P[7]);
+    const nTL = cam.project(x0, bn + h, zn, P[0]);
+    const nTR = cam.project(x1, bn + h, zn, P[1]);
+    const nBR = cam.project(x1, bn, zn, P[2]);
+    const nBL = cam.project(x0, bn, zn, P[3]);
+    const fTL = cam.project(x0, bf + h, zf, P[4]);
+    const fTR = cam.project(x1, bf + h, zf, P[5]);
+    const fBR = cam.project(x1, bf, zf, P[6]);
+    const fBL = cam.project(x0, bf, zf, P[7]);
     if (!nTL.visible || !fTL.visible) return;
     const quad = (a, b, c, d) => {
       ctx.beginPath();
@@ -556,14 +634,13 @@ export class Renderer {
       ctx.globalAlpha = fillA * 0.7;
       ctx.fill();
     }
-    if (cam.y > h) {
+    if (fTL.y < nTL.y) {
       quad(nTL, nTR, fTR, fTL);
       ctx.globalAlpha = Math.min(1, fillA * 1.6);
       ctx.fill();
     }
     ctx.globalAlpha = 1;
     const lw = Math.max(1, Math.min(3, nTL.s * 0.05));
-    // Top far edge + verticals give the neon silhouette.
     ctx.beginPath();
     ctx.moveTo(fTL.x, fTL.y);
     ctx.lineTo(fTR.x, fTR.y);
@@ -582,23 +659,23 @@ export class Renderer {
     }
   }
 
-  drawGateFrame(g) {
+  drawGateFrame(track, g) {
     const cam = this.camera;
     const P = this.P;
     const ctx = this.ctx;
     const alpha = this.fade(g.z);
     const off = g.width / 2 + GATE_POST_WIDTH;
+    const base = track.heightAt(g.z);
     const color = g.resolved ? tierColor(g.result) : PALETTE.gate;
-    cam.project(g.x - off, GATE_HEIGHT, g.z, P[0]);
-    cam.project(g.x + off, GATE_HEIGHT, g.z, P[1]);
+    cam.project(g.x - off, base + GATE_HEIGHT, g.z, P[0]);
+    cam.project(g.x + off, base + GATE_HEIGHT, g.z, P[1]);
     if (!P[0].visible) return;
     ctx.beginPath();
     ctx.moveTo(P[0].x, P[0].y);
     ctx.lineTo(P[1].x, P[1].y);
     this.neon(color, Math.max(1.5, P[0].s * 0.08), alpha);
-    // Centre guide: a small diamond on the floor and a faint centre line.
-    cam.project(g.x, 0.02, g.z, P[2]);
-    cam.project(g.x, GATE_HEIGHT, g.z, P[3]);
+    cam.project(g.x, base + 0.02, g.z, P[2]);
+    cam.project(g.x, base + GATE_HEIGHT, g.z, P[3]);
     const d = Math.max(3, P[2].s * 0.18);
     ctx.beginPath();
     ctx.moveTo(P[2].x, P[2].y - d * 0.5);
@@ -625,9 +702,10 @@ export class Renderer {
     }
   }
 
-  drawOrb(o, time) {
+  drawOrb(track, o, time) {
     const cam = this.camera;
-    const q = cam.project(o.x, o.y + 0.1 * Math.sin(time * 4 + o.z * 0.7), o.z, this.q);
+    const y = track.heightAt(o.z) + o.y + 0.1 * Math.sin(time * 4 + o.z * 0.7);
+    const q = cam.project(o.x, y, o.z, this.q);
     if (!q.visible) return;
     const ctx = this.ctx;
     const alpha = this.fade(o.z);
@@ -647,8 +725,7 @@ export class Renderer {
   skinColors(skin, time) {
     if (skin.glow !== 'prism') return skin;
     const hue = (time * 70) % 360;
-    const c = hslToHex(hue, 100, 62);
-    return { core: '#ffffff', glow: c, trail: hslToHex((hue + 40) % 360, 100, 65) };
+    return { core: '#ffffff', glow: hslToHex(hue, 100, 62), trail: hslToHex((hue + 40) % 360, 100, 65) };
   }
 
   drawPlayer(v) {
@@ -657,17 +734,15 @@ export class Renderer {
     const r = v.radius;
     const colors = this.skinColors(v.skin, v.time);
 
-    // Ghost of the best run, same depth as the player.
     if (v.ghostVisible) {
       const g = cam.project(v.ghostX, v.ghostY + r, v.pz, this.q);
       if (g.visible) {
-        const gr = r * g.s;
         ctx.globalAlpha = 0.35;
         ctx.strokeStyle = PALETTE.white;
         ctx.lineWidth = 1.5;
         ctx.setLineDash([4, 4]);
         ctx.beginPath();
-        ctx.arc(g.x, g.y, gr, 0, Math.PI * 2);
+        ctx.arc(g.x, g.y, r * g.s, 0, Math.PI * 2);
         ctx.stroke();
         ctx.setLineDash([]);
         ctx.globalAlpha = 1;
@@ -676,21 +751,20 @@ export class Renderer {
 
     if (!v.playerVisible) return;
 
-    // Contact shadow on the floor (only where there is floor).
+    // Soft contact shadow on the deck: widens and fades with height.
     if (v.shadow) {
-      const sh = cam.project(v.px, 0, v.pz, this.q);
+      const sh = cam.project(v.px, v.groundY, v.pz, this.q);
       if (sh.visible) {
-        const k = Math.max(0.35, 1 - v.py * 0.35);
-        ctx.globalAlpha = 0.45 * k;
-        ctx.fillStyle = '#000010';
-        ctx.beginPath();
-        ctx.ellipse(sh.x, sh.y, r * sh.s * 1.1 * k, r * sh.s * 0.35 * k, 0, 0, Math.PI * 2);
-        ctx.fill();
+        const height = Math.max(0, v.py - v.groundY);
+        const k = 1 / (1 + height * 0.45);
+        const w = r * sh.s * (2.6 + height * 0.5);
+        const hgt = w * 0.32;
+        ctx.globalAlpha = 0.7 * k * v.playerAlpha;
+        ctx.drawImage(this.shadow, sh.x - w / 2, sh.y - hgt / 2, w, hgt);
         ctx.globalAlpha = 1;
       }
     }
 
-    // Trail (world-space history).
     const trail = v.trail;
     ctx.globalCompositeOperation = 'lighter';
     const trailSprite = glowSprite(colors.trail, 64);
@@ -700,7 +774,7 @@ export class Renderer {
       if (!tq.visible) continue;
       const k = 1 - i / trail.size;
       const sz = r * tq.s * 2.2 * k;
-      ctx.globalAlpha = 0.28 * k;
+      ctx.globalAlpha = 0.26 * k;
       ctx.drawImage(trailSprite, tq.x - sz / 2, tq.y - sz / 2, sz, sz);
     }
 
@@ -712,7 +786,7 @@ export class Renderer {
     }
     const pr = r * q.s;
     const glow = pr * 4.2;
-    ctx.globalAlpha = 0.55 * v.playerAlpha;
+    ctx.globalAlpha = 0.5 * v.playerAlpha;
     ctx.drawImage(glowSprite(colors.glow, 128), q.x - glow / 2, q.y - glow / 2, glow, glow);
     ctx.globalCompositeOperation = 'source-over';
 
@@ -721,8 +795,7 @@ export class Renderer {
     ctx.globalAlpha = v.playerAlpha;
     ctx.drawImage(ballSprite(colors.core, colors.glow, 128), q.x - sx, q.y - sy + (pr - sy), sx * 2, sy * 2);
 
-    // Rolling equator band.
-    ctx.strokeStyle = withAlpha('#ffffff', 0.55 * v.playerAlpha);
+    ctx.strokeStyle = withAlpha('#ffffff', 0.5 * v.playerAlpha);
     ctx.lineWidth = Math.max(1, pr * 0.08);
     for (let k = 0; k < 2; k++) {
       const ph = v.roll + k * Math.PI;
@@ -765,12 +838,12 @@ export class Renderer {
       cam.project(t.x, t.y, t.z, q);
       if (!q.visible) continue;
       const k = t.life / t.maxLife;
-      const size = Math.round(Math.max(13, Math.min(30, q.s * 0.55)) * t.scale);
-      ctx.font = `800 ${size}px system-ui, sans-serif`;
+      const size = Math.round(Math.max(13, Math.min(28, q.s * 0.5)) * t.scale);
+      ctx.font = `italic 800 ${size}px ${FONT_DISPLAY}`;
       ctx.globalAlpha = Math.min(1, k * 1.6);
-      ctx.fillStyle = '#000014';
       const y = q.y - (1 - k) * 46;
-      ctx.fillText(t.text, q.x + 1.5, y + 1.5);
+      ctx.fillStyle = '#000014';
+      ctx.fillText(t.text, q.x + 2, y + 2);
       ctx.fillStyle = t.color;
       ctx.fillText(t.text, q.x, y);
     }

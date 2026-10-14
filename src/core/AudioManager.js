@@ -8,7 +8,6 @@ export class AudioManager {
     this.ctx = null;
     this.master = null;
     this.noiseBuffer = null;
-    this.engine = null;
     this.muted = false;
     this.volume = 0.7;
     this.orbCombo = 0;
@@ -169,40 +168,13 @@ export class AudioManager {
     this.tone(1046.5, 0.22, { type: 'triangle', gain: 0.14, delay: 0.1 });
   }
 
-  click() {
-    this.tone(900, 0.05, { type: 'triangle', gain: 0.08 });
+  /** Airy whoosh when a ramp or crest launches the ball. */
+  launch() {
+    this.noise(0.45, { gain: 0.12, filter: 3000, endFilter: 400 });
+    this.tone(420, 0.35, { type: 'sine', gain: 0.06, endFreq: 900 });
   }
 
-  /** Subtle speed-following hum while playing (the game's only "music"). */
-  setEngine(active, speed01) {
-    if (!this.ctx) return;
-    try {
-      if (!this.engine) {
-        const osc = this.ctx.createOscillator();
-        const osc2 = this.ctx.createOscillator();
-        const f = this.ctx.createBiquadFilter();
-        const g = this.ctx.createGain();
-        osc.type = 'sawtooth';
-        osc2.type = 'sawtooth';
-        f.type = 'lowpass';
-        f.frequency.value = 300;
-        g.gain.value = 0;
-        osc.connect(f);
-        osc2.connect(f);
-        f.connect(g).connect(this.master);
-        osc.start();
-        osc2.start();
-        this.engine = { osc, osc2, f, g };
-      }
-      const t = this.ctx.currentTime;
-      const e = this.engine;
-      const base = 48 + speed01 * 30;
-      e.osc.frequency.setTargetAtTime(base, t, 0.2);
-      e.osc2.frequency.setTargetAtTime(base * 1.505, t, 0.2);
-      e.f.frequency.setTargetAtTime(220 + speed01 * 500, t, 0.2);
-      e.g.gain.setTargetAtTime(active ? 0.035 : 0, t, active ? 0.3 : 0.08);
-    } catch {
-      /* ignore */
-    }
+  click() {
+    this.tone(900, 0.05, { type: 'triangle', gain: 0.08 });
   }
 }
