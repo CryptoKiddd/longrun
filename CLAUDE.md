@@ -26,19 +26,19 @@ InputManager ──intent──▶ Simulation.step (fixed 1/120 s, PLAYING only)
 Game (FSM + DOM UI + audio + platform) ──▶ Renderer (Camera projection, read-only view of state)
 ```
 
-- `src/config.js` — every tuning constant **and the coordinate convention**: x right, y up (gravity −y), z forward, metres/seconds. `Player.y` is the ball's *bottom*.
+- `src/config.js` — every tuning constant **and the coordinate convention**: x right, y up (gravity −y), z forward, metres/seconds. `Player.y` is the ball bottom's *absolute* height; terrain height is `track.heightAt(z)`; obstacle/orb/gate heights are *relative to the surface*.
 - `src/core/` — `GameLoop` (accumulator, clamped deltas, capped catch-up), `GameState` (FSM), `InputManager`, `Simulation` (DOM-free run model), `Game` (wires everything), `AudioManager`, `Storage`, `rng`.
 - `src/physics/` — `Collision` (swept sphere/AABB etc.), `PhysicsWorld` (sub-steps as separate functions).
-- `src/world/` — `Track` (pooled live objects), `PatternLibrary`, `PatternValidator` (reachability DP), `SegmentGenerator`, `DifficultyManager`.
+- `src/world/` — `Track` (pooled live objects), `Terrain` (eased hills, slopes, ramp lips, drop-offs), `PatternLibrary`, `PatternValidator` (trajectory-aware reachability DP), `SegmentGenerator`, `DifficultyManager`.
 - `src/systems/` — scoring, progression (records, challenges, cosmetics), particles, ghost.
 - `src/rendering/` — `Camera` (projection + visual-only track curvature), `Renderer`, `sprites`.
-- `src/ui/` — DOM overlays (menus) and the canvas HUD.
+- `src/ui/` — DOM overlays (menus), the canvas HUD, and `fonts.js` (bundled OFL fonts in `assets/fonts/`, copied to `dist/` by the build).
 - `src/platform/PlatformAdapter.js` — no-op adapter; real SDKs plug in here only.
 
 ## Non-negotiable rules
 
 1. **Physics never reads render/screen state.** Projection is one-way. Curvature is cosmetic.
-2. **Determinism:** course + mover phase depend only on distance and seed. Difficulty depends on distance, never score. Don't use `Math.random()` in generation; use the seeded `Rng`.
+2. **Determinism:** course, terrain, forward speed and mover phase depend only on distance and seed. Difficulty depends on distance, never score. Don't use `Math.random()` in generation; use the seeded `Rng`.
 3. **Fairness:** every generated segment must pass `validateSegment` (all entry lanes survivable). Never make the game harder by silently changing hitboxes.
 4. Gameplay updates only in `State.PLAYING`. Add new states/transitions in `GameState.js`'s table.
 5. No allocations in per-step/per-frame hot paths when avoidable (pools, reused event objects).

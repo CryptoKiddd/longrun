@@ -1,10 +1,10 @@
 # PULSE: One More Run
 
-A skill-and-precision endless runner for the browser. Steer a glowing energy ball along a neon track above the void, thread precision gates for a score multiplier, jump gaps and hurdles, collect energy orbs, and beat your personal best.
+A skill-and-precision endless runner for the browser. Roll a glowing energy ball down a neon course above the void: carve through slaloms, ride rolling hills and downhill runs, launch off ramps, drop onto lower decks, thread precision gates for a score multiplier, and beat your personal best.
 
 - **Pure HTML5 Canvas 2D + native ES modules.** No runtime dependencies, no backend, no login.
 - **Fair by construction.** Every generated segment is checked by a reachability validator, and an autopilot test plays 3 km through the real physics in CI.
-- **Static-host ready.** `npm run build` outputs three files (`index.html`, `game.js`, `styles.css`, ~74 KiB of JS) that also run from `file://`.
+- **Static-host ready.** `npm run build` outputs `index.html`, `game.js` (~83 KiB), `styles.css` and `assets/fonts/` (two bundled SIL-OFL fonts, ~82 KiB). No network requests; also runs from `file://`.
 
 ## Controls
 
@@ -50,16 +50,17 @@ Gate tiers come from how close to the centre you pass: **PERFECT** (75 % or bett
 
 ```
 index.html, styles.css      entry page + overlay styles
+assets/fonts/               bundled Unbounded + Chakra Petch (SIL OFL, see LICENSE.txt)
 src/main.js                 bootstrap
 src/config.js               all tuning constants + coordinate convention
 src/core/                   Game (wiring + FSM), GameLoop, GameState, InputManager,
                             Simulation (DOM-free run model), AudioManager, Storage, rng
 src/physics/                Collision primitives, PhysicsWorld sub-steps
 src/entities/Player.js      player state
-src/world/                  Track, PatternLibrary, PatternValidator, SegmentGenerator, DifficultyManager
+src/world/                  Track, Terrain (elevation), PatternLibrary, PatternValidator, SegmentGenerator, DifficultyManager
 src/systems/                Score, Progression (records/challenges/skins), Ghost, Particles
 src/rendering/              Camera (projection), Renderer, sprites
-src/ui/                     HUD (canvas), UI (DOM overlays)
+src/ui/                     HUD (canvas), UI (DOM overlays), fonts
 src/platform/               PlatformAdapter (no-op integration boundary)
 tests/                      node:test suites
 scripts/                    serve, build, check, smoke

@@ -1,5 +1,6 @@
 import { SCORING, SPEED } from '../config.js';
 import { PALETTE } from '../rendering/Renderer.js';
+import { FONT_DISPLAY, FONT_UI } from './fonts.js';
 
 /** Fast integer formatting with thousands separators. */
 export function formatInt(n) {
@@ -31,124 +32,165 @@ class NumberText {
 }
 
 const MULT_LABELS = ['x0', 'x1', 'x2', 'x3', 'x4', 'x5'];
-const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+const SKEW = -0.18;
+const SPEED_SEGMENTS = 12;
 
-/** In-game heads-up display, drawn on the canvas (no per-frame DOM writes). */
+/** In-game heads-up display drawn on the canvas (no per-frame DOM writes). */
 export class HUD {
   constructor() {
     this.score = new NumberText();
     this.best = new NumberText('', 'BEST ');
-    this.distance = new NumberText(' m');
+    this.distance = new NumberText();
   }
 
   /**
-   * @param {CanvasRenderingContext2D} ctx (CSS-pixel transform already set)
-   * @param {object} h HUD view model from Game
+   * @param {CanvasRenderingContext2D} ctx CSS-pixel transform already set
+   * @param {object} hud view model from Game
    */
   draw(ctx, w, h, hud) {
-    const pad = Math.max(14, Math.min(24, w * 0.025));
+    const pad = Math.max(16, Math.min(28, w * 0.025));
     const narrow = w < 560;
     ctx.textBaseline = 'alphabetic';
-
-    // Score + best.
-    const scoreSize = narrow ? 28 : 34;
     ctx.textAlign = 'left';
-    ctx.font = `800 ${scoreSize}px ${FONT}`;
-    shadowText(ctx, this.score.get(hud.score), pad, pad + scoreSize * 0.85, '#ffffff');
-    const scoreW = ctx.measureText(this.score.text).width;
-    ctx.font = `600 12px ${FONT}`;
-    const beating = hud.best > 0 && hud.score > hud.best;
-    if (hud.best > 0) shadowText(ctx, beating ? 'NEW BEST!' : this.best.get(hud.best), pad, pad + scoreSize + 14, beating ? PALETTE.orb : '#8fa3d9');
 
-    // Multiplier chip with streak pips.
-    const mx = pad + scoreW + 14;
-    const my = pad + 4;
+    // ---- score (skewed display numerals) ----
+    const scoreSize = narrow ? 30 : 38;
+    skewed(ctx, pad, pad + scoreSize * 0.86, () => {
+      ctx.font = `800 ${scoreSize}px ${FONT_DISPLAY}`;
+      shadowText(ctx, this.score.get(hud.score), 0, 0, '#ffffff');
+    });
+    ctx.font = `800 ${scoreSize}px ${FONT_DISPLAY}`;
+    const scoreW = ctx.measureText(this.score.text).width;
+    if (hud.best > 0) {
+      const beating = hud.score > hud.best;
+      ctx.font = `700 12px ${FONT_UI}`;
+      spaced(ctx, beating ? 'NEW BEST' : this.best.get(hud.best), pad + 2, pad + scoreSize + 16, beating ? PALETTE.orb : '#7f8fc4', 2.5);
+    }
+
+    // ---- multiplier: parallelogram badge + streak pips ----
     const mult = hud.multiplier;
-    const chipW = 44;
-    ctx.globalAlpha = mult > 1 ? 1 : 0.55;
-    roundRect(ctx, mx, my, chipW, 26, 13);
-    ctx.fillStyle = mult > 1 ? 'rgba(167,123,255,0.28)' : 'rgba(80,100,160,0.2)';
-    ctx.fill();
-    ctx.strokeStyle = mult > 1 ? PALETTE.gate : '#4a5a90';
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-    ctx.font = `800 15px ${FONT}`;
+    const bx = pad + scoreW + 18;
+    const by = pad + 4;
+    const bw = 52;
+    const bh = 28;
+    parallelogram(ctx, bx, by, bw, bh, 8);
+    if (mult > 1) {
+      ctx.fillStyle = PALETTE.danger;
+      ctx.fill();
+    } else {
+      ctx.strokeStyle = 'rgba(150,170,255,0.4)';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+    ctx.font = `800 15px ${FONT_DISPLAY}`;
     ctx.textAlign = 'center';
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText(MULT_LABELS[mult] || `x${mult}`, mx + chipW / 2, my + 18);
+    ctx.fillStyle = mult > 1 ? '#14010a' : '#9fb0e0';
+    ctx.fillText(MULT_LABELS[mult] || `x${mult}`, bx + bw / 2, by + 20);
+    ctx.textAlign = 'left';
     if (mult < SCORING.MAX_MULTIPLIER) {
       const per = SCORING.STREAK_PER_MULTIPLIER;
       const filled = hud.streak % per;
+      const pw = (bw - 8) / per - 4;
       for (let i = 0; i < per; i++) {
-        ctx.fillStyle = i < filled ? PALETTE.perfect : 'rgba(140,160,220,0.35)';
-        ctx.fillRect(mx + 8 + i * ((chipW - 16) / per), my + 30, (chipW - 16) / per - 3, 3);
+        parallelogram(ctx, bx + 4 + i * (pw + 4), by + bh + 5, pw, 4, 2);
+        ctx.fillStyle = i < filled ? PALETTE.perfect : 'rgba(150,170,255,0.25)';
+        ctx.fill();
       }
     }
-    ctx.globalAlpha = 1;
 
-    // Distance + speed (top centre on wide screens, under score on narrow).
+    // ---- distance + segmented speed meter ----
+    const dSize = narrow ? 18 : 22;
     const dx = narrow ? pad : w / 2;
-    const dy = narrow ? pad + scoreSize + 40 : pad + 22;
-    ctx.textAlign = narrow ? 'left' : 'center';
-    ctx.font = `700 ${narrow ? 15 : 19}px ${FONT}`;
-    shadowText(ctx, this.distance.get(hud.distance), dx, dy, '#d6e4ff');
-    const barW = narrow ? 70 : 96;
-    const bx = narrow ? pad : w / 2 - barW / 2;
-    const sp = Math.max(0, Math.min(1, (hud.speed - SPEED.MIN) / (SPEED.MAX - SPEED.MIN)));
-    ctx.fillStyle = 'rgba(80,100,160,0.35)';
-    ctx.fillRect(bx, dy + 7, barW, 3);
-    ctx.fillStyle = PALETTE.rail;
-    ctx.fillRect(bx, dy + 7, barW * (0.08 + 0.92 * sp), 3);
+    const dy = narrow ? pad + scoreSize + 46 : pad + 24;
+    ctx.font = `800 ${dSize}px ${FONT_DISPLAY}`;
+    const dText = this.distance.get(hud.distance);
+    const dW = ctx.measureText(dText).width;
+    const startX = narrow ? dx : dx - (dW + 18) / 2;
+    skewed(ctx, startX, dy, () => {
+      ctx.font = `800 ${dSize}px ${FONT_DISPLAY}`;
+      shadowText(ctx, dText, 0, 0, '#d9e4ff');
+      ctx.font = `700 11px ${FONT_UI}`;
+      ctx.fillStyle = '#7f8fc4';
+      ctx.fillText('M', dW + 5, 0);
+    });
+    const sp = Math.max(0, Math.min(1, (hud.speed - SPEED.MIN) / (SPEED.MAX + 4 - SPEED.MIN)));
+    const segW = narrow ? 6 : 7;
+    const meterW = SPEED_SEGMENTS * (segW + 3);
+    const mx = narrow ? pad : w / 2 - meterW / 2;
+    const lit = Math.max(1, Math.round(sp * SPEED_SEGMENTS));
+    for (let i = 0; i < SPEED_SEGMENTS; i++) {
+      parallelogram(ctx, mx + i * (segW + 3), dy + 9, segW, 6, 2);
+      ctx.fillStyle = i < lit ? (i >= SPEED_SEGMENTS - 3 ? PALETTE.danger : PALETTE.rail) : 'rgba(150,170,255,0.18)';
+      ctx.fill();
+    }
 
-    // Challenge / unlock toast.
+    // ---- toast (missions / records) ----
     if (hud.toastAlpha > 0) {
       ctx.globalAlpha = hud.toastAlpha;
-      ctx.font = `700 ${narrow ? 13 : 15}px ${FONT}`;
-      ctx.textAlign = 'center';
-      const tw = Math.min(w - 2 * pad, ctx.measureText(hud.toast).width + 36);
-      const ty = narrow ? dy + 30 : pad + 52;
-      roundRect(ctx, w / 2 - tw / 2, ty, tw, 32, 16);
-      ctx.fillStyle = 'rgba(10,14,40,0.85)';
+      ctx.font = `700 ${narrow ? 13 : 14}px ${FONT_UI}`;
+      const tw = Math.min(w - 2 * pad, ctx.measureText(hud.toast).width + 48);
+      const tx = w / 2 - tw / 2;
+      const ty = narrow ? dy + 32 : pad + 56;
+      parallelogram(ctx, tx, ty, tw, 34, 10);
+      ctx.fillStyle = 'rgba(2,3,11,0.88)';
       ctx.fill();
-      ctx.strokeStyle = PALETTE.orb;
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
+      parallelogram(ctx, tx, ty, 18, 34, 10);
+      ctx.fillStyle = PALETTE.orb;
+      ctx.fill();
       ctx.fillStyle = '#fff1c9';
-      ctx.fillText(hud.toast, w / 2, ty + 21, tw - 20);
+      ctx.fillText(hud.toast, tx + 28, ty + 22, tw - 40);
       ctx.globalAlpha = 1;
     }
 
-    // Tutorial hint.
+    // ---- tutorial hint ----
     if (hud.hint && hud.hintAlpha > 0) {
       ctx.globalAlpha = hud.hintAlpha;
-      ctx.font = `700 ${narrow ? 15 : 18}px ${FONT}`;
-      ctx.textAlign = 'center';
-      // Portrait puts the hint in the sky (clear of JUMP); otherwise bottom centre.
+      ctx.font = `700 ${narrow ? 15 : 17}px ${FONT_UI}`;
       const y = hud.hintHigh ? Math.max(pad + 130, h * 0.24) : h * 0.9;
-      const tw = ctx.measureText(hud.hint).width + 40;
-      roundRect(ctx, w / 2 - tw / 2, y - 24, tw, 36, 18);
-      ctx.fillStyle = 'rgba(4,8,28,0.7)';
+      const tw = ctx.measureText(hud.hint).width + 48;
+      parallelogram(ctx, w / 2 - tw / 2, y - 25, tw, 38, 12);
+      ctx.fillStyle = 'rgba(2,3,11,0.78)';
       ctx.fill();
       ctx.fillStyle = PALETTE.perfect;
+      ctx.textAlign = 'center';
       ctx.fillText(hud.hint, w / 2, y);
+      ctx.textAlign = 'left';
       ctx.globalAlpha = 1;
     }
   }
 }
 
 function shadowText(ctx, text, x, y, color) {
-  ctx.fillStyle = 'rgba(0,0,16,0.7)';
-  ctx.fillText(text, x + 1.5, y + 2);
+  ctx.fillStyle = 'rgba(0,0,16,0.75)';
+  ctx.fillText(text, x + 2, y + 2);
   ctx.fillStyle = color;
   ctx.fillText(text, x, y);
 }
 
-function roundRect(ctx, x, y, w, h, r) {
+/** Draw with an italic-style skew anchored at (x, y). */
+function skewed(ctx, x, y, draw) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.transform(1, 0, SKEW, 1, 0, 0);
+  draw();
+  ctx.restore();
+}
+
+/** Letter-spaced small caps (uses ctx.letterSpacing when supported). */
+function spaced(ctx, text, x, y, color, spacing) {
+  const supported = 'letterSpacing' in ctx;
+  if (supported) ctx.letterSpacing = `${spacing}px`;
+  ctx.fillStyle = color;
+  ctx.fillText(text, x, y);
+  if (supported) ctx.letterSpacing = '0px';
+}
+
+/** Parallelogram path leaning right (matches the DOM cut-corner shapes). */
+function parallelogram(ctx, x, y, w, h, lean) {
   ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
+  ctx.moveTo(x + lean, y);
+  ctx.lineTo(x + w, y);
+  ctx.lineTo(x + w - lean, y + h);
+  ctx.lineTo(x, y + h);
   ctx.closePath();
 }

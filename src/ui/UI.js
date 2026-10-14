@@ -2,9 +2,17 @@ import { SKINS, CHALLENGES } from '../systems/ProgressionSystem.js';
 import { formatInt } from './HUD.js';
 
 const CAUSE_TEXT = {
-  obstacle: 'Hit a barrier',
-  fell: 'Fell into the void',
+  obstacle: 'Wiped out',
+  fell: 'Lost to the void',
 };
+
+/** Set "<number><small>unit</small>" without innerHTML. */
+function setValueWithUnit(el, number, unit) {
+  el.textContent = number;
+  const small = el.ownerDocument.createElement('small');
+  small.textContent = unit;
+  el.appendChild(small);
+}
 
 /**
  * DOM overlays (menus, pause, game over, HUD buttons).
@@ -31,6 +39,7 @@ export class UI {
       mute: $('btn-mute'),
       menuBest: $('menu-best'),
       menuBestDist: $('menu-best-dist'),
+      menuRuns: $('menu-runs'),
       challenges: $('menu-challenges'),
       skins: $('menu-skins'),
       skinProgress: $('skin-progress'),
@@ -111,7 +120,8 @@ export class UI {
   renderMenu(prog) {
     const d = prog.data;
     this.el.menuBest.textContent = formatInt(d.bestScore);
-    this.el.menuBestDist.textContent = `${formatInt(d.bestDistance)} m`;
+    setValueWithUnit(this.el.menuBestDist, formatInt(d.bestDistance), 'm');
+    this.el.menuRuns.textContent = `Run #${formatInt(d.totalRuns + 1)}`;
 
     const active = prog.activeChallenges();
     const ul = this.el.challenges;
@@ -119,7 +129,7 @@ export class UI {
     if (!active.length) {
       const li = this.doc.createElement('li');
       li.className = 'done';
-      li.textContent = 'All challenges complete. Chase your best!';
+      li.textContent = 'All missions complete. Chase your best.';
       ul.appendChild(li);
     }
     for (const c of active) {
@@ -129,7 +139,7 @@ export class UI {
     }
 
     const done = prog.completedCount;
-    this.el.skinProgress.textContent = `${done}/${CHALLENGES.length} challenges`;
+    this.el.skinProgress.textContent = `${done}/${CHALLENGES.length}`;
     const box = this.el.skins;
     box.textContent = '';
     for (const s of SKINS) {
@@ -148,8 +158,8 @@ export class UI {
       ball.style.background =
         s.glow === 'prism'
           ? 'conic-gradient(#ff2e88, #ffc23d, #7dff5a, #22e4ff, #a77bff, #ff2e88)'
-          : `radial-gradient(circle at 35% 30%, #fff, ${s.core} 30%, ${s.glow} 75%)`;
-      ball.style.boxShadow = s.glow === 'prism' ? '0 0 10px #fff8' : `0 0 10px ${s.glow}`;
+          : `linear-gradient(135deg, ${s.core} 0%, ${s.glow} 70%)`;
+      ball.style.boxShadow = s.glow === 'prism' ? '0 0 12px #fff6' : `0 0 14px ${s.glow}88`;
       b.appendChild(ball);
       if (!unlocked) {
         const need = this.doc.createElement('span');
@@ -174,9 +184,9 @@ export class UI {
   renderGameOver(s, result, best, cause, extras) {
     this.el.overCause.textContent = CAUSE_TEXT[cause] || 'Run over';
     this.el.overRecord.hidden = !result.newBest;
-    this.el.overRecord.textContent = result.newBest ? 'New record!' : '';
+    this.el.overRecord.textContent = result.newBest ? 'New record' : '';
     this.el.overScore.textContent = formatInt(s.score);
-    this.el.overDistance.textContent = `${formatInt(s.distance)} m`;
+    setValueWithUnit(this.el.overDistance, formatInt(s.distance), 'm');
     this.el.overOrbs.textContent = formatInt(s.orbs);
     this.el.overPrecision.textContent = s.gatesTotal ? `${s.precision}%` : '–';
     this.el.overStreak.textContent = formatInt(s.bestStreak);
