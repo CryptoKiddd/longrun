@@ -71,15 +71,16 @@ export class Simulation {
 
     for (const orb of ev.orbs) {
       const points = this.score.collectOrb();
-      this.notices.push({ kind: 'orb', points, x: orb.x, y: orb.y, z: orb.z });
+      this.notices.push({ kind: 'orb', points, x: orb.x, y: orb.y + this.track.heightAt(orb.z), z: orb.z });
     }
     for (const g of ev.gates) {
       const { tier, points } = this.score.resolveGate(g.result === 'pass', g.accuracy);
       g.result = tier;
       g.flash = 1;
-      this.notices.push({ kind: 'gate', tier, points, x: g.x, y: 1.6, z: g.z, multiplier: this.score.multiplier });
+      this.notices.push({ kind: 'gate', tier, points, x: g.x, y: 1.6 + this.track.heightAt(g.z), z: g.z, multiplier: this.score.multiplier });
     }
     if (ev.jumped) this.notices.push({ kind: 'jump' });
+    if (ev.launched) this.notices.push({ kind: 'launch' });
     if (ev.landed) this.notices.push({ kind: 'land', speed: ev.landingSpeed });
     if (ev.railHit) this.notices.push({ kind: 'rail' });
 

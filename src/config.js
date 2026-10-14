@@ -42,9 +42,10 @@ export const TRACK = Object.freeze({
 });
 
 export const SPEED = Object.freeze({
-  MIN: 14, // m/s at the start of a run
-  MAX: 31, // m/s cap
-  RAMP_DISTANCE: 5200, // m over which speed eases from MIN to MAX
+  MIN: 16, // m/s at the start of a run
+  MAX: 36, // m/s cap (before slope bonus)
+  RAMP_DISTANCE: 3800, // m over which speed eases from MIN to MAX
+  SLOPE_BONUS: 14, // m/s gained per unit of downhill grade (lost uphill)
 });
 
 export const SCORING = Object.freeze({
@@ -70,4 +71,4 @@ export const RENDER = Object.freeze({
 });
 
 /** Bump when course generation changes so stale ghost data is discarded. */
-export const COURSE_VERSION = 1;
+export const COURSE_VERSION = 2;

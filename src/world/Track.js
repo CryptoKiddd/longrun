@@ -1,4 +1,5 @@
 import { TRACK } from '../config.js';
+import { Terrain } from './Terrain.js';
 
 /**
  * Live course contents in world coordinates, built from segment specs.
@@ -8,6 +9,9 @@ import { TRACK } from '../config.js';
  * 'mover' (oscillates laterally), 'post' (precision-gate post).
  * Movers are driven by the PLAYER'S distance, not wall-clock time, so their
  * position at any point of the course is deterministic and validatable.
+ *
+ * Elevation lives in `terrain`. Obstacle and orb heights are RELATIVE to the
+ * local surface, so hazards always sit on the track whatever its slope.
  */
 
 export const GATE_POST_WIDTH = 0.35;
@@ -42,6 +46,7 @@ export class Track {
     this.orbs = [];
     this.gates = [];
     this.zones = [];
+    this.terrain = new Terrain();
     this.pools = { obstacles: [], holes: [], orbs: [], gates: [], zones: [] };
     this.generatedUntil = 0;
     this.segmentCount = 0;
@@ -53,6 +58,7 @@ export class Track {
       for (const o of this[key]) pool.push(o);
       this[key].length = 0;
     }
+    this.terrain.reset();
     this.generatedUntil = 0;
     this.segmentCount = 0;
   }
@@ -87,6 +93,7 @@ export class Track {
    * @param {import('./PatternLibrary.js').SegmentSpec} spec
    */
   addSegment(spec, zStart) {
+    this.addTerrain(spec, zStart);
     const items = spec.items.slice().sort((a, b) => (a.z ?? a.z0) - (b.z ?? b.z0));
     for (const it of items) {
       switch (it.type) {
@@ -147,6 +154,31 @@ export class Track {
     this.segmentCount++;
   }
 
+  /**
+   * Extend the elevation profile over the segment. spec.terrain pieces are
+   * { z0, z1, dh, ease } in local z; gaps between them stay flat.
+   */
+  addTerrain(spec, zStart) {
+    const t = this.terrain;
+    if (t.endZ < zStart) t.append(zStart, 0);
+    if (spec.terrain) {
+      const pieces = spec.terrain.slice().sort((a, b) => a.z0 - b.z0);
+      for (const piece of pieces) {
+        if (zStart + piece.z0 > t.endZ) t.append(zStart + piece.z0, 0);
+        t.append(zStart + piece.z1, piece.dh, !!piece.ease);
+      }
+    }
+    if (t.endZ < zStart + spec.length) t.append(zStart + spec.length, 0);
+  }
+
+  heightAt(z) {
+    return this.terrain.heightAt(z);
+  }
+
+  slopeAt(z) {
+    return this.terrain.slopeAt(z);
+  }
+
   /** Return objects entirely behind minZ to their pools (in-place compaction). */
   recycle(minZ) {
     this.compact('obstacles', (o) => o.z1 < minZ);
@@ -154,6 +186,7 @@ export class Track {
     this.compact('orbs', (o) => o.z < minZ);
     this.compact('gates', (g) => g.z < minZ);
     this.compact('zones', (z) => z.z1 < minZ);
+    this.terrain.recycle(minZ - 10);
   }
 
   compact(key, isDead) {

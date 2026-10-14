@@ -8,71 +8,112 @@ import assert from 'node:assert/strict';
 import { PHYSICS } from '../src/config.js';
 import { Simulation } from '../src/core/Simulation.js';
 import { Player } from '../src/entities/Player.js';
-import { moverX } from '../src/world/Track.js';
-import { sweptSphereAABB } from '../src/physics/Collision.js';
-import { stepForward, stepHorizontal, resolveRails, stepVertical, requestJump, StepEvents } from '../src/physics/PhysicsWorld.js';
+import { stepForward, stepHorizontal, resolveRails, stepVertical, requestJump, findObstacleHit, StepEvents } from '../src/physics/PhysicsWorld.js';
 
 const DT = PHYSICS.DT;
-const HORIZON = Math.round(1.5 / DT);
+const SEG = 0.2; // s per plan segment
+const SEG_STEPS = Math.round(SEG / DT);
+const DEPTH = 8; // 1.6 s lookahead
+const NODE_LIMIT = 4000;
 
-const PLANS = [];
-for (const jumpAt of [-1, 0, 0.12, 0.25, 0.4, 0.55]) {
-  for (const s1 of [0, -1, 1]) {
-    for (const switchAt of [0.15, 0.35, 0.7]) {
-      for (const s2 of [0, -1, 1]) PLANS.push({ s1, s2, switchAt, jumpAt });
-    }
-  }
-}
-
-const probe = new Player();
+const stack = Array.from({ length: DEPTH + 1 }, () => new Player());
 const ev = new StepEvents();
+let nodes = 0;
 
-/** Does following `plan` from time offset `t0` survive the horizon? (no world mutation) */
-function survives(sim, plan, t0) {
-  const track = sim.track;
-  Object.assign(probe, sim.player);
-  const support = (x, z) => track.isSupported(x, z);
-  for (let i = 0; i < HORIZON; i++) {
-    const t = t0 + i * DT;
-    probe.savePrevious();
-    if (plan.jumpAt >= 0 && Math.abs(t - plan.jumpAt) < DT / 2) requestJump(probe);
-    stepForward(probe, DT);
-    stepHorizontal(probe, t < plan.switchAt ? plan.s1 : plan.s2, DT);
-    resolveRails(probe, track.halfWidth, null);
+/** Advance probe by one plan segment using the real physics (no world mutation). */
+function simulateSegment(track, b, steer, jump) {
+  const r = b.radius;
+  for (let i = 0; i < SEG_STEPS; i++) {
+    b.savePrevious();
+    if (jump && i === 0) requestJump(b);
+    stepForward(b, DT, track);
+    stepHorizontal(b, steer, DT);
+    resolveRails(b, track.halfWidth, null);
     ev.reset();
-    stepVertical(probe, support, DT, ev);
-    if (ev.crashed || probe.falling) return false;
-    const r = probe.radius;
-    for (const o of track.obstacles) {
-      if (o.z1 < probe.prevZ - 2 || o.z0 > probe.z + 2) continue;
-      let ox = o.x;
-      let sx = probe.prevX;
-      if (o.kind === 'mover') {
-        ox = moverX(o, probe.z);
-        sx -= ox - moverX(o, probe.prevZ);
-      }
-      const hw = o.w / 2;
-      if (sweptSphereAABB(sx, probe.prevY + r, probe.prevZ, probe.x, probe.y + r, probe.z, r, ox - hw, 0, o.z0, ox + hw, o.h, o.z1) >= 0) return false;
-    }
+    stepVertical(b, track, DT, ev);
+    if (ev.crashed || b.falling) return false;
+    const ay = b.prevY - track.heightAt(b.prevZ) + r;
+    const by = b.y - track.heightAt(b.z) + r;
+    if (findObstacleHit(track.obstacles, b.prevX, ay, b.prevZ, b.x, by, b.z, r, b.prevZ, b.z)) return false;
   }
   return true;
 }
 
-function autopilot(seed, distance) {
+const OPTIONS = [];
+for (const jump of [false, true]) for (const steer of [0, -1, 1]) OPTIONS.push({ steer, jump });
+
+/** Depth-first search for a sequence of segments that survives the lookahead. */
+function search(track, depth, prevSteer) {
+  if (depth === DEPTH) return [];
+  const order = OPTIONS.slice().sort((a, b) => (a.jump - b.jump) || ((a.steer === prevSteer ? 0 : 1) - (b.steer === prevSteer ? 0 : 1)));
+  for (const o of order) {
+    if (++nodes > NODE_LIMIT) return null;
+    const next = stack[depth + 1];
+    Object.assign(next, stack[depth]);
+    if (o.jump && !next.grounded) continue;
+    if (!simulateSegment(track, next, o.steer, o.jump)) continue;
+    const rest = search(track, depth + 1, o.steer);
+    if (rest) return [o, ...rest];
+  }
+  return null;
+}
+
+function planFrom(sim, prevSteer) {
+  Object.assign(stack[0], sim.player);
+  nodes = 0;
+  return search(sim.track, 0, prevSteer);
+}
+
+/** Does the remaining plan still survive from the current state? */
+function planHolds(sim, plan, offsetSteps) {
+  const b = stack[0];
+  Object.assign(b, sim.player);
+  // Finish the current segment, then the rest.
+  let first = true;
+  for (const o of plan) {
+    const steps = first ? SEG_STEPS - offsetSteps : SEG_STEPS;
+    for (let i = 0; i < steps; i++) {
+      const r = b.radius;
+      b.savePrevious();
+      if (o.jump && i === 0 && (!first || offsetSteps === 0)) requestJump(b);
+      stepForward(b, DT, sim.track);
+      stepHorizontal(b, o.steer, DT);
+      resolveRails(b, sim.track.halfWidth, null);
+      ev.reset();
+      stepVertical(b, sim.track, DT, ev);
+      if (ev.crashed || b.falling) return false;
+      if (findObstacleHit(sim.track.obstacles, b.prevX, b.prevY - sim.track.heightAt(b.prevZ) + r, b.prevZ, b.x, b.y - sim.track.heightAt(b.z) + r, b.z, r, b.prevZ, b.z)) return false;
+    }
+    first = false;
+  }
+  return true;
+}
+
+export function autopilot(seed, distance) {
   const sim = new Simulation();
   sim.reset(seed);
-  let plan = PLANS[0];
-  let planT = 0;
-  let steps = 0;
+  let plan = [];
+  let offset = 0; // steps into plan[0]
+  let steer = 0;
   while (sim.player.z < distance && !sim.over) {
-    if (steps % 6 === 0 && !survives(sim, plan, planT)) {
-      plan = PLANS.find((p) => survives(sim, p, 0)) || plan;
-      planT = 0;
+    if (offset >= SEG_STEPS) {
+      plan.shift();
+      offset = 0;
     }
-    const jump = plan.jumpAt >= 0 && Math.abs(planT - plan.jumpAt) < DT / 2;
-    sim.step(DT, { steer: planT < plan.switchAt ? plan.s1 : plan.s2, jump });
-    planT += DT;
-    steps++;
+    const needPlan = plan.length < 5 || (offset % 6 === 0 && !planHolds(sim, plan, offset));
+    let jumpNow = false;
+    if (needPlan) {
+      const p = planFrom(sim, steer);
+      if (p) {
+        plan = p;
+        offset = 0;
+      }
+    }
+    const seg = plan[0] || { steer: 0, jump: false };
+    if (offset === 0 && seg.jump) jumpNow = true;
+    steer = seg.steer;
+    sim.step(DT, { steer, jump: jumpNow });
+    offset++;
   }
   return sim;
 }

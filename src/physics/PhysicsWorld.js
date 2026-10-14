@@ -1,8 +1,22 @@
 import { PHYSICS } from '../config.js';
-import { speedAt } from '../world/DifficultyManager.js';
+import { forwardSpeed } from '../world/DifficultyManager.js';
 import { sweptSphereAABB, segmentPointDistSq, crossPlaneZ } from './Collision.js';
+import { moverX } from '../world/Track.js';
 
 export const ORB_PICKUP_RADIUS = 0.85; // centre-to-centre, player r + orb r + forgiveness
+
+/**
+ * A "world" for the physics functions:
+ *   isSupported(x, z) -> boolean   floor exists (no hole, inside rails)
+ *   heightAt(z)       -> number    surface height (m)
+ *   slopeAt(z)        -> number    surface grade dh/dz
+ * Player.y is the ABSOLUTE height of the ball bottom.
+ */
+export const FLAT_WORLD = Object.freeze({
+  isSupported: () => true,
+  heightAt: () => 0,
+  slopeAt: () => 0,
+});
 
 /** Per-step event record. Reused every step to avoid allocations. */
 export class StepEvents {
@@ -14,6 +28,7 @@ export class StepEvents {
 
   reset() {
     this.jumped = false;
+    this.launched = false; // left the ground with upward speed (ramp lip / crest)
     this.landed = false;
     this.landingSpeed = 0;
     this.railHit = false;
@@ -26,12 +41,12 @@ export class StepEvents {
 }
 
 // ---------------------------------------------------------------------------
-// Sub-systems. Each is a small pure-ish function over the player state.
+// Sub-systems. Each is a small function over the player state.
 // ---------------------------------------------------------------------------
 
-/** World progression: forward speed is a function of distance. */
-export function stepForward(p, dt) {
-  p.vz = speedAt(p.z);
+/** World progression: forward speed depends on distance and the local grade. */
+export function stepForward(p, dt, world = FLAT_WORLD) {
+  p.vz = forwardSpeed(p.z, world.slopeAt(p.z));
   p.z += p.vz * dt;
 }
 
@@ -89,13 +104,20 @@ export function canJump(p) {
 }
 
 /**
- * Vertical motion: buffered jump, gravity (toward -y), integration, landing,
- * leaving edges, and falling into holes.
- * @param {(x:number, z:number) => boolean} isSupported
+ * Vertical motion over terrain:
+ *  - grounded: follow the surface while gravity can hold the ball on it;
+ *    leave the ground at crests, ramp lips and drop-offs (keeping vy);
+ *  - jump adds JUMP_VELOCITY to the current vertical velocity (ramp boost);
+ *  - airborne: semi-implicit Euler under gravity (-y), land on floor,
+ *    fall into holes, or hit the side of a platform from below.
  */
-export function stepVertical(p, isSupported, dt, events, cfg = PHYSICS) {
+export function stepVertical(p, world, dt, events, cfg = PHYSICS) {
+  const ground = world.heightAt(p.z);
+  const groundVy = world.slopeAt(p.z) * p.vz;
+  const supported = world.isSupported(p.x, p.z);
+
   if (p.jumpBuffer > 0 && canJump(p)) {
-    p.vy = cfg.JUMP_VELOCITY;
+    p.vy = (p.grounded ? p.vy : Math.max(0, p.vy)) + cfg.JUMP_VELOCITY;
     p.grounded = false;
     p.jumpedSinceGround = true;
     p.jumpBuffer = 0;
@@ -104,86 +126,103 @@ export function stepVertical(p, isSupported, dt, events, cfg = PHYSICS) {
   }
   p.jumpBuffer = Math.max(0, p.jumpBuffer - dt);
 
-  const supported = isSupported(p.x, p.z);
-
   if (p.grounded) {
     if (supported) {
-      p.y = 0;
-      p.vy = 0;
-      return;
+      // Stay on the surface while gravity can supply the required downward
+      // acceleration (v^2 * curvature >= -g) and the surface hasn't stepped
+      // down (ramp lip / drop-off) since the last step.
+      const minVy = p.vy - cfg.GRAVITY * dt - 1e-6;
+      const stepped = ground < p.y + p.vy * dt - 0.05;
+      if (!stepped && groundVy >= minVy) {
+        p.y = ground;
+        p.vy = groundVy;
+        return;
+      }
+      // The surface falls away faster than gravity: we're airborne.
+      if (events && p.vy > 2) events.launched = true;
     }
-    // Rolled off an edge: start falling, with a short coyote window.
     p.grounded = false;
     p.coyote = cfg.COYOTE_TIME;
   } else {
     p.coyote = Math.max(0, p.coyote - dt);
   }
 
-  // Semi-implicit Euler (velocity first, then position).
+  const vyBefore = p.vy;
   p.vy -= cfg.GRAVITY * dt;
   p.y += p.vy * dt;
 
-  if (p.y <= 0) {
-    // Lip tolerance grows with fall speed so a fast step can never tunnel
-    // through the surface.
-    const lip = cfg.LANDING_LIP + Math.abs(p.vy) * dt;
-    if (supported && !p.falling && p.y >= -lip && p.vy <= 0) {
+  const rel = p.y - ground;
+  if (rel <= 0) {
+    // Lip tolerance grows with relative speed so a fast step can't tunnel.
+    const lip = cfg.LANDING_LIP + Math.abs(p.vy - groundVy) * dt;
+    if (supported && !p.falling && rel >= -lip) {
       if (events) {
         events.landed = true;
-        events.landingSpeed = -p.vy;
+        events.landingSpeed = Math.max(0, groundVy - vyBefore);
       }
-      p.y = 0;
-      p.vy = 0;
+      p.y = ground;
+      p.vy = groundVy;
       p.grounded = true;
       p.jumpedSinceGround = false;
       p.coyote = 0;
-    } else if (supported && p.y < -lip) {
-      // Below the surface but now under floor: hit the hole wall.
+    } else if (supported) {
+      // Below the surface but under floor: hit the side of a platform.
       p.falling = true;
-      if (events && p.y < -lip) {
+      if (events) {
         events.crashed = true;
         events.crashCause = 'fell';
       }
-    } else if (!supported && p.y < -cfg.LANDING_LIP) {
+    } else if (rel < -cfg.LANDING_LIP) {
       p.falling = true;
     }
   }
-  if (p.y < -cfg.FALL_DEATH_DEPTH && events && !events.crashed) {
+  if (rel < -cfg.FALL_DEATH_DEPTH && events && !events.crashed) {
     events.crashed = true;
     events.crashCause = 'fell';
   }
 }
 
 /**
- * Swept collision of the player's motion this step against obstacles,
- * orbs and gate planes. Movers are tested in the obstacle's frame
- * (relative motion) so their own movement cannot cause tunnelling.
+ * First obstacle hit by the sphere moving from A to B, or null. Positions are
+ * in SURFACE-RELATIVE height (y above the local track surface). Movers are
+ * tested in the obstacle's frame. Pure: does not mutate the track.
  */
-export function detectCollisions(p, track, events, prevMoverZ) {
-  const r = p.radius;
-  const ax = p.prevX, ay = p.prevY + r, az = p.prevZ;
-  const bx = p.x, by = p.y + r, bz = p.z;
+export function findObstacleHit(obstacles, ax, ay, az, bx, by, bz, r, zA, zB) {
   const zLo = Math.min(az, bz) - r - 1;
   const zHi = Math.max(az, bz) + r + 1;
-
-  for (const o of track.obstacles) {
+  for (const o of obstacles) {
     if (o.z1 < zLo || o.z0 > zHi) continue;
-    let startX = ax;
+    let ox = o.x;
+    let sx = ax;
     if (o.kind === 'mover') {
-      // Shift the start point by the obstacle's displacement this step.
-      const prevOx = o.baseX + o.amp * Math.sin(o.freq * (prevMoverZ - o.z0) + o.phase);
-      startX = ax - (o.x - prevOx);
+      ox = moverX(o, zB);
+      sx = ax - (ox - moverX(o, zA));
     }
     const hw = o.w / 2;
-    const t = sweptSphereAABB(startX, ay, az, bx, by, bz, r, o.x - hw, 0, o.z0, o.x + hw, o.h, o.z1);
-    if (t >= 0) {
-      events.crashed = true;
-      events.crashCause = 'obstacle';
-      events.crashObstacle = o;
-      return;
-    }
+    if (sweptSphereAABB(sx, ay, az, bx, by, bz, r, ox - hw, 0, o.z0, ox + hw, o.h, o.z1) >= 0) return o;
+  }
+  return null;
+}
+
+/**
+ * Swept collision of the player's motion this step against obstacles,
+ * orbs and gate planes (all heights relative to the local surface).
+ */
+export function detectCollisions(p, track, events) {
+  const r = p.radius;
+  const ax = p.prevX, ay = p.prevY - track.heightAt(p.prevZ) + r, az = p.prevZ;
+  const bx = p.x, by = p.y - track.heightAt(p.z) + r, bz = p.z;
+
+  const hit = findObstacleHit(track.obstacles, ax, ay, az, bx, by, bz, r, p.prevZ, p.z);
+  if (hit) {
+    events.crashed = true;
+    events.crashCause = 'obstacle';
+    events.crashObstacle = hit;
+    return;
   }
 
+  const zLo = Math.min(az, bz) - r - 1;
+  const zHi = Math.max(az, bz) + r + 1;
   const pick2 = ORB_PICKUP_RADIUS * ORB_PICKUP_RADIUS;
   for (const orb of track.orbs) {
     if (orb.collected || orb.z < zLo || orb.z > zHi) continue;
@@ -220,7 +259,6 @@ export class PhysicsWorld {
     this.track = track;
     this.cfg = cfg;
     this.events = new StepEvents();
-    this.isSupported = (x, z) => track.isSupported(x, z);
   }
 
   /**
@@ -235,12 +273,12 @@ export class PhysicsWorld {
     p.savePrevious();
     if (intent.jump) requestJump(p, this.cfg);
 
-    stepForward(p, dt);
+    stepForward(p, dt, this.track);
     this.track.updateMovers(p.z);
     stepHorizontal(p, intent.steer, dt, this.cfg);
     resolveRails(p, this.track.halfWidth, ev, this.cfg);
-    stepVertical(p, this.isSupported, dt, ev, this.cfg);
-    if (!ev.crashed && !p.falling) detectCollisions(p, this.track, ev, p.prevZ);
+    stepVertical(p, this.track, dt, ev, this.cfg);
+    if (!ev.crashed && !p.falling) detectCollisions(p, this.track, ev);
     if (ev.crashed) p.alive = false;
     return ev;
   }

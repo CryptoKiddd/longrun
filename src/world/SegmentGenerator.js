@@ -90,11 +90,11 @@ export class SegmentGenerator {
     const level = difficultyAt(z);
 
     // Fatigue budget: insert a recovery runway after demanding stretches.
-    const budget = lerpLevel(level, 3, 7);
+    const budget = lerpLevel(level, 4, 10);
     if (this.heat >= budget) {
       this.heat = 0;
       this.lastId = 'runway';
-      this.place(runway({ rng, level, speed: speedAt(z), z, leadIn: 0, intro: false }, lerpLevel(level, 1.6, 0.9)));
+      this.place(runway({ rng, level, speed: speedAt(z), z, leadIn: 0, intro: false }, lerpLevel(level, 1.3, 0.75)));
       return;
     }
 
@@ -103,12 +103,13 @@ export class SegmentGenerator {
       if (!choice) break;
       const { pattern, intro } = choice;
       for (let grow = 0; grow <= MAX_LEADIN_GROWTH; grow++) {
-        // Speed rises slightly over a segment; validate at the faster end.
-        const speed = speedAt(z + 80);
-        const leadIn = speed * (lerpLevel(level, 0.8, 0.45) + grow * 0.3);
+        // Patterns size themselves for the speed mid-segment; the validator
+        // integrates the exact speed (including slope bonus) itself.
+        const speed = speedAt(z + 40);
+        const leadIn = speed * (lerpLevel(level, 0.6, 0.32) + grow * 0.3);
         const ctx = { rng, level, speed, z, leadIn, intro };
         const spec = pattern.build(ctx);
-        const result = this.validate(spec, speed);
+        const result = this.validate(spec, z);
         if (result.ok) {
           this.introduced.add(pattern.id);
           this.lastId = pattern.id;

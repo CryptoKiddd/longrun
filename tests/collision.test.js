@@ -96,7 +96,7 @@ test('collectibles are awarded only once', () => {
   p.prevZ = 4;
   p.z = 6;
   p.prevX = p.x = 0;
-  detectCollisions(p, track, ev, p.prevZ);
+  detectCollisions(p, track, ev);
   assert.equal(ev.orbs.length, 0);
 });
 

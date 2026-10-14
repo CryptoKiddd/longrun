@@ -12,36 +12,36 @@ const H = TRACK.HALF_WIDTH;
 
 test('validator rejects an unavoidable full-width wall', () => {
   const spec = { id: 'x', length: 60, items: [{ type: 'wall', x: 0, z: 20, w: 2 * H, d: 0.6, h: 2.6 }] };
-  assert.equal(validateSegment(spec, 20).ok, false);
+  assert.equal(validateSegment(spec, 0, { speed: 20 }).ok, false);
 });
 
 test('validator rejects a hole too long to jump', () => {
   const spec = { id: 'x', length: 80, items: [{ type: 'hole', x0: -H, x1: H, z0: 20, z1: 45 }] };
-  assert.equal(validateSegment(spec, 20).ok, false);
+  assert.equal(validateSegment(spec, 0, { speed: 20 }).ok, false);
 });
 
 test('validator rejects a hazard with no reaction distance from some lanes', () => {
   // Wall covering the left 2/3 one metre after entry: left lanes cannot escape.
   const spec = { id: 'x', length: 40, items: [{ type: 'wall', x: -1.5, z: 1, w: 6, d: 0.6, h: 2.6 }] };
-  const r = validateSegment(spec, 20);
+  const r = validateSegment(spec, 0, { speed: 20 });
   assert.equal(r.ok, false);
   assert.ok(r.unsafeLanes > 0 && r.unsafeLanes < r.lanes);
 });
 
 test('validator accepts a jumpable hole and a steerable wall', () => {
-  assert.equal(validateSegment({ id: 'x', length: 60, items: [{ type: 'hole', x0: -H, x1: H, z0: 20, z1: 25 }] }, 18).ok, true);
-  assert.equal(validateSegment({ id: 'x', length: 60, items: [{ type: 'wall', x: -2, z: 25, w: 5, d: 0.6, h: 2.6 }] }, 18).ok, true);
+  assert.equal(validateSegment({ id: 'x', length: 60, items: [{ type: 'hole', x0: -H, x1: H, z0: 20, z1: 25 }] }, 0, { speed: 18 }).ok, true);
+  assert.equal(validateSegment({ id: 'x', length: 60, items: [{ type: 'wall', x: -2, z: 25, w: 5, d: 0.6, h: 2.6 }] }, 0, { speed: 18 }).ok, true);
 });
 
 test('validator rejects a segment that ends mid-jump over a hole', () => {
   const spec = { id: 'x', length: 26, items: [{ type: 'hole', x0: -H, x1: H, z0: 20, z1: 26 }] };
-  assert.equal(validateSegment(spec, 18).ok, false);
+  assert.equal(validateSegment(spec, 0, { speed: 18 }).ok, false);
 });
 
 test('every pattern can be validated at every difficulty (with lead-in growth)', () => {
   for (const p of PATTERNS) {
     for (const z of [p.unlock + 1, 1200, 2500, 4000, 7000]) {
-      const speed = speedAt(z + 80);
+      const speed = speedAt(z + 40);
       const level = difficultyAt(z);
       let seed = 1;
       let failures = 0;
@@ -49,8 +49,8 @@ test('every pattern can be validated at every difficulty (with lead-in growth)',
         const r = new Rng(seed++ * 7919);
         let ok = false;
         for (let g = 0; g <= 3 && !ok; g++) {
-          const spec = p.build({ rng: r, level, speed, z, leadIn: speed * (0.8 - 0.35 * level + g * 0.3), intro: false });
-          ok = validateSegment(spec, speed).ok;
+          const spec = p.build({ rng: r, level, speed, z, leadIn: speed * (0.6 - 0.28 * level + g * 0.3), intro: false });
+          ok = validateSegment(spec, z).ok;
         }
         if (!ok) failures++;
       }
@@ -64,9 +64,9 @@ function generateCourse(seed, until) {
   const track = new Track();
   const specs = [];
   const gen = new SegmentGenerator(track, {
-    validate: (spec, speed) => {
-      const r = validateSegment(spec, speed);
-      if (r.ok) specs.push({ spec, speed });
+    validate: (spec, z) => {
+      const r = validateSegment(spec, z);
+      if (r.ok) specs.push({ spec, z });
       return r;
     },
   });
@@ -106,14 +106,14 @@ test('mechanics are introduced progressively, starting gently', () => {
   assert.ok(firstIndex('hole') < firstIndex('mover'));
 });
 
-test('first ten seconds are approachable: no hazards in the tutorial stretch', () => {
+test('the opening is approachable: no hazards in the first six seconds', () => {
   const track = new Track();
   const gen = new SegmentGenerator(track);
   gen.reset(11);
   gen.ensureAhead(0, 400);
-  const tenSecondsOfTrack = SPEED.MIN * 9;
-  for (const o of track.obstacles) assert.ok(o.z0 > tenSecondsOfTrack, `obstacle at ${o.z0}`);
-  for (const h of track.holes) assert.ok(h.z0 > tenSecondsOfTrack, `hole at ${h.z0}`);
+  const calm = SPEED.MIN * 6;
+  for (const o of track.obstacles) assert.ok(o.z0 > calm, `obstacle at ${o.z0}`);
+  for (const h of track.holes) assert.ok(h.z0 > calm, `hole at ${h.z0}`);
 });
 
 test('opening course is identical across runs (deterministic for ghosts); later course varies', () => {
@@ -152,5 +152,5 @@ test('difficulty and speed rise monotonically and plateau', () => {
   }
   assert.equal(speedAt(0), SPEED.MIN);
   assert.equal(speedAt(1e6), SPEED.MAX);
-  assert.ok(difficultyAt(150) < 0.06);
+  assert.ok(difficultyAt(150) < 0.08);
 });

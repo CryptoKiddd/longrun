@@ -11,12 +11,13 @@ import {
   canJump,
   resolveRails,
   StepEvents,
+  FLAT_WORLD,
 } from '../src/physics/PhysicsWorld.js';
 import { GameLoop } from '../src/core/GameLoop.js';
 
 const DT = PHYSICS.DT;
-const always = () => true;
-const never = () => false;
+const always = FLAT_WORLD;
+const never = { ...FLAT_WORLD, isSupported: () => false };
 
 test('gravity decreases vertical velocity by g*dt each step', () => {
   const p = new Player();

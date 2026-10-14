@@ -14,9 +14,23 @@ export function difficultyAt(z) {
   return 1 - Math.pow(1 - t, 1.7);
 }
 
-/** Forward speed (m/s) at distance z. */
+/** Base forward speed (m/s) at distance z, ignoring terrain. */
 export function speedAt(z) {
   return SPEED.MIN + (SPEED.MAX - SPEED.MIN) * difficultyAt(z);
+}
+
+/**
+ * Forward speed including the slope effect: downhill is faster, uphill slower.
+ * Still a pure function of (distance, terrain), so runs stay deterministic.
+ */
+export function forwardSpeed(z, grade) {
+  return speedAt(z) + slopeBonus(grade);
+}
+
+/** Speed change from the local grade (negative grade = downhill = faster). */
+export function slopeBonus(grade) {
+  const g = grade < -0.4 ? -0.4 : grade > 0.25 ? 0.25 : grade;
+  return -SPEED.SLOPE_BONUS * g;
 }
 
 /** Interpolate a parameter by level: lerpLevel(level, easyValue, hardValue). */
@@ -30,14 +44,19 @@ export function lerpLevel(level, easy, hard) {
  */
 export const UNLOCKS = Object.freeze({
   tutorial: 0,
-  slalom: 140,
-  gate: 220,
-  hurdle: 320,
-  hole: 430,
-  gateRow: 560,
-  partialHole: 650,
-  mover: 800,
-  riskRoute: 900,
-  combo: 1500,
-  doubleMover: 1900,
+  slalom: 110,
+  hills: 150,
+  gate: 190,
+  hurdle: 250,
+  downhill: 300,
+  hole: 340,
+  ramp: 420,
+  gateRow: 470,
+  partialHole: 540,
+  drop: 600,
+  mover: 660,
+  riskRoute: 740,
+  combo: 1000,
+  slopeSlalom: 1150,
+  doubleMover: 1300,
 });
