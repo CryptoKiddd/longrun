@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+    <meta name="theme-color" content="#03050f" />
+    <meta name="description" content="PULSE: One More Run — steer a glowing energy ball through a neon course above the void. Precision gates, jumps, and your personal best." />
+    <title>PULSE: One More Run</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2303050f'/%3E%3Ccircle cx='32' cy='34' r='14' fill='%2322e4ff'/%3E%3Ccircle cx='27' cy='29' r='5' fill='%23e8feff'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <canvas id="game" aria-label="PULSE game view"></canvas>
+
+    <div id="hud-controls" class="hud-controls" hidden>
+      <button id="btn-mute" class="icon-btn" type="button" aria-label="Mute sound" aria-pressed="false">
+        <svg class="icon-sound-on" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4z" /><path d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" fill="none" stroke-width="2" stroke-linecap="round" /></svg>
+        <svg class="icon-sound-off" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4z" /><path d="M16.5 9.5l5 5m0-5l-5 5" fill="none" stroke-width="2" stroke-linecap="round" /></svg>
+      </button>
+      <button id="btn-pause" class="icon-btn" type="button" aria-label="Pause">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1" /><rect x="14" y="5" width="4" height="14" rx="1" /></svg>
+      </button>
+    </div>
+
+    <button id="btn-jump" class="jump-btn" type="button" aria-label="Jump" hidden>JUMP</button>
+
+    <section id="screen-loading" class="screen visible" aria-live="polite">
+      <div class="loader"><span class="logo small">PULSE</span><span class="loader-bar"></span></div>
+    </section>
+
+    <section id="screen-menu" class="screen" aria-labelledby="menu-title">
+      <div class="panel menu">
+        <div class="menu-main">
+          <h1 id="menu-title" class="logo">PULSE</h1>
+          <p class="tagline">One more run.</p>
+          <button id="btn-play" class="btn primary" type="button">Play <kbd>Enter</kbd></button>
+          <div class="records">
+            <div><span class="label">Best score</span><span id="menu-best" class="value">0</span></div>
+            <div><span class="label">Best distance</span><span id="menu-best-dist" class="value">0 m</span></div>
+          </div>
+          <ul class="controls-help">
+            <li class="kbd-only"><span><kbd>&larr;</kbd><kbd>&rarr;</kbd> / <kbd>A</kbd><kbd>D</kbd></span> steer</li>
+            <li class="kbd-only"><span><kbd>Space</kbd> / <kbd>&uarr;</kbd></span> jump</li>
+            <li class="kbd-only"><span><kbd>Esc</kbd> / <kbd>P</kbd></span> pause &middot; <kbd>M</kbd> mute</li>
+            <li class="touch-only"><span>Drag</span> anywhere to steer</li>
+            <li class="touch-only"><span>JUMP</span> button or second finger to jump</li>
+            <li><span class="dot gate"></span> fly through gate centres for a multiplier</li>
+            <li><span class="dot danger"></span> magenta is danger &middot; <span class="dot orb"></span> amber orbs</li>
+          </ul>
+        </div>
+        <div class="menu-side">
+          <h2>Challenges</h2>
+          <ul id="menu-challenges" class="challenges"></ul>
+          <h2>Ball <span id="skin-progress" class="muted"></span></h2>
+          <div id="menu-skins" class="skins" role="radiogroup" aria-label="Ball style"></div>
+          <h2>Settings</h2>
+          <div class="settings">
+            <label class="toggle"><input id="set-sound" type="checkbox" /> <span>Sound</span></label>
+            <label class="toggle"><input id="set-effects" type="checkbox" /> <span>Reduced motion</span></label>
+            <label class="toggle"><input id="set-ghost" type="checkbox" /> <span>Best-run ghost</span></label>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="screen-pause" class="screen dim" aria-labelledby="pause-title">
+      <div class="panel small">
+        <h2 id="pause-title" class="title">Paused</h2>
+        <button id="btn-resume" class="btn primary" type="button">Resume</button>
+        <button id="btn-pause-restart" class="btn" type="button">Restart</button>
+        <button id="btn-pause-menu" class="btn ghost" type="button">Menu</button>
+      </div>
+    </section>
+
+    <section id="screen-over" class="screen dim" aria-labelledby="over-title" aria-live="polite">
+      <div class="panel over">
+        <p id="over-cause" class="cause">Hit a barrier</p>
+        <div id="over-record" class="badge" hidden>New record!</div>
+        <div class="final-score"><span id="over-score">0</span><span class="label" id="over-title">Score</span></div>
+        <dl class="stats">
+          <div><dt>Distance</dt><dd id="over-distance">0 m</dd></div>
+          <div><dt>Orbs</dt><dd id="over-orbs">0</dd></div>
+          <div><dt>Precision</dt><dd id="over-precision">0%</dd></div>
+          <div><dt>Best streak</dt><dd id="over-streak">0</dd></div>
+          <div><dt>Gates</dt><dd id="over-gates">0/0</dd></div>
+          <div><dt>Personal best</dt><dd id="over-best">0</dd></div>
+        </dl>
+        <p id="over-extra" class="extra"></p>
+        <button id="btn-restart" class="btn primary" type="button">Run again <kbd>Space</kbd></button>
+        <button id="btn-over-menu" class="btn ghost" type="button">Menu</button>
+      </div>
+    </section>
+
+    <noscript><p class="noscript">PULSE needs JavaScript to run.</p></noscript>
+    <script type="module" src="src/main.js"></script>
+  </body>
+</html>
