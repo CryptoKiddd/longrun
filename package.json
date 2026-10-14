@@ -1,0 +1,22 @@
+{
+  "name": "pulse-one-more-run",
+  "version": "1.0.0",
+  "description": "PULSE: One More Run — a skill-and-precision endless runner for the browser (Canvas 2D, no runtime dependencies).",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/serve.mjs . 5173",
+    "build": "node scripts/build.mjs",
+    "preview": "node scripts/serve.mjs dist 4173",
+    "test": "node --test \"tests/*.test.js\"",
+    "check": "node scripts/check.mjs",
+    "verify": "npm run check && npm test && npm run build"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  },
+  "engines": {
+    "node": ">=21"
+  },
+  "license": "UNLICENSED"
+}
