@@ -12,6 +12,7 @@ Skill-and-precision endless runner for the browser (primary target: Y8). Native 
 | Production build → `dist/` | `npm run build` |
 | Serve the build | `npm run preview` → http://localhost:4173 |
 | Everything | `npm run verify` |
+| Browser smoke test (headless Chrome) | `node scripts/smoke.mjs [root] [outDir]` (use `dist` to test the build) |
 
 `index.html` loads `src/main.js` as a module; the build swaps that exact tag for a bundled classic `game.js` (keep the tag text unchanged — `scripts/build.mjs` asserts it).
 

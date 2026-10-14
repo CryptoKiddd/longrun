@@ -15,7 +15,7 @@ const result = await build({
   bundle: true,
   minify: true,
   format: 'iife',
-  target: ['es2019', 'chrome80', 'firefox78', 'safari13'],
+  target: 'es2020',
   outfile: resolve(out, 'game.js'),
   legalComments: 'none',
   metafile: true,
