@@ -23,6 +23,9 @@ export class Player {
     this.jumpedSinceGround = false;
     this.falling = false; // committed to a fall into the void (no control)
     this.alive = true;
+    this.dashTime = 0; // remaining burst time
+    this.dashDir = 0;
+    this.dashCooldown = 0;
   }
 
   savePrevious() {

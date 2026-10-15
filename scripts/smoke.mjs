@@ -85,6 +85,7 @@ const KEYS = {
   Escape: { key: 'Escape', code: 'Escape', keyCode: 27 },
   ArrowLeft: { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 },
   ArrowRight: { key: 'ArrowRight', code: 'ArrowRight', keyCode: 39 },
+  Shift: { key: 'Shift', code: 'ShiftLeft', keyCode: 16 },
 };
 async function key(name, type = 'press') {
   const k = KEYS[name];
@@ -156,6 +157,16 @@ async function run() {
   await key('ArrowLeft', 'up');
   const x2 = await evaluate('__pulse.sim.player.x');
   if (!(x2 < x1)) problems.push(`steering left did not move the player (x=${x2})`);
+  // Dash: Shift while steering bursts sideways and starts the cooldown.
+  await key('ArrowRight', 'down');
+  const xd0 = await evaluate('__pulse.sim.player.x');
+  await key('Shift');
+  await sleep(250);
+  await key('ArrowRight', 'up');
+  const dashState = await evaluate('({ x: __pulse.sim.player.x, cd: __pulse.sim.player.dashCooldown })');
+  if (!(dashState.cd > 0)) problems.push('dash did not trigger (no cooldown)');
+  if (!(dashState.x - xd0 > 1.5 || dashState.x > 3.5)) problems.push(`dash moved too little (${xd0} -> ${dashState.x})`);
+  await sleep(300);
   await key('Space');
   await sleep(120);
   const y = await evaluate('__pulse.sim.player.y');

@@ -80,6 +80,8 @@ export class Simulation {
       this.notices.push({ kind: 'gate', tier, points, x: g.x, y: 1.6 + this.track.heightAt(g.z), z: g.z, multiplier: this.score.multiplier });
     }
     if (ev.jumped) this.notices.push({ kind: 'jump' });
+    if (ev.dashed) this.notices.push({ kind: 'dash', dir: ev.dashed });
+    if (ev.slammed) this.notices.push({ kind: 'slam' });
     if (ev.launched) this.notices.push({ kind: 'launch' });
     if (ev.landed) this.notices.push({ kind: 'land', speed: ev.landingSpeed });
     if (ev.railHit) this.notices.push({ kind: 'rail' });

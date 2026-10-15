@@ -28,6 +28,11 @@ export const PHYSICS = Object.freeze({
   AIR_CONTROL: 0.65, // steering acceleration multiplier while airborne
   RAIL_BOUNCE: 0.25, // fraction of lateral speed reflected by side rails
 
+  DASH_SPEED: 19, // m/s lateral burst
+  DASH_TIME: 0.14, // s the burst lasts (~2.7 m sidestep)
+  DASH_COOLDOWN: 1.0, // s before the next dash
+  SLAM_SPEED: 16, // m/s downward when dashing in the air without a direction
+
   PLAYER_RADIUS: 0.45,
   LANDING_LIP: 0.12, // m below surface still snapped up onto a floor edge
   FALL_DEATH_DEPTH: 1.4, // m below the surface at which a fall ends the run
@@ -42,9 +47,9 @@ export const TRACK = Object.freeze({
 });
 
 export const SPEED = Object.freeze({
-  MIN: 16, // m/s at the start of a run
-  MAX: 36, // m/s cap (before slope bonus)
-  RAMP_DISTANCE: 3800, // m over which speed eases from MIN to MAX
+  MIN: 22, // m/s at the start of a run
+  MAX: 38, // m/s cap (before slope bonus)
+  RAMP_DISTANCE: 3600, // m over which speed eases from MIN to MAX
   SLOPE_BONUS: 14, // m/s gained per unit of downhill grade (lost uphill)
 });
 
@@ -71,4 +76,4 @@ export const RENDER = Object.freeze({
 });
 
 /** Bump when course generation changes so stale ghost data is discarded. */
-export const COURSE_VERSION = 2;
+export const COURSE_VERSION = 3;

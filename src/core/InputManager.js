@@ -6,17 +6,19 @@
  * Intents:
  *   steer            -1..1 (analog for touch, digital for keys)
  *   consumeJump()    true once per physical jump press (no key-repeat)
- * Actions (edge events via onAction): 'jump' | 'confirm' | 'pause' | 'mute' | 'blur'
+ *   consumeDash()    true once per dash press; dashDir is ±1 for touch flicks, else 0
+ * Actions (edge events via onAction): 'jump' | 'dash' | 'confirm' | 'pause' | 'mute' | 'blur'
  *
  * Simultaneous left+right keys: the most recently pressed direction wins.
  */
 const LEFT = ['ArrowLeft', 'KeyA'];
 const RIGHT = ['ArrowRight', 'KeyD'];
 const JUMP = ['Space', 'ArrowUp', 'KeyW'];
+const DASH = ['ShiftLeft', 'ShiftRight', 'KeyX', 'KeyK'];
 const PAUSE = ['Escape', 'KeyP'];
 const CONFIRM = ['Enter', 'NumpadEnter', 'Space'];
 const MUTE = ['KeyM'];
-const GAME_KEYS = new Set([...LEFT, ...RIGHT, ...JUMP, ...PAUSE, ...CONFIRM, ...MUTE]);
+const GAME_KEYS = new Set([...LEFT, ...RIGHT, ...JUMP, ...DASH, ...PAUSE, ...CONFIRM, ...MUTE]);
 
 function isInteractiveTarget(el) {
   if (!el || !el.tagName) return false;
@@ -28,18 +30,21 @@ export class InputManager {
   /**
    * @param {{ keyTarget?: EventTarget, surface?: HTMLElement|null, jumpButton?: HTMLElement|null, doc?: Document|null, win?: Window|null }} opts
    */
-  constructor({ keyTarget = null, surface = null, jumpButton = null, doc = null, win = null } = {}) {
+  constructor({ keyTarget = null, surface = null, jumpButton = null, dashButton = null, doc = null, win = null } = {}) {
     this.keyTarget = keyTarget;
     this.surface = surface;
     this.jumpButton = jumpButton;
+    this.dashButton = dashButton;
     this.doc = doc;
     this.win = win;
 
     this.held = new Set();
     this.lastDir = 0;
     this.jumpPresses = 0;
+    this.dashPresses = 0;
+    this.dashDir = 0;
     this.touchAxis = 0;
-    this.steerPointer = null; // { id, anchorX, startY, startT, swiped }
+    this.steerPointer = null; // { id, anchorX, startX, startY, startT, swiped, flicked }
     this.usingTouch = false;
     this.listeners = [];
     this.bound = [];
@@ -71,9 +76,19 @@ export class InputManager {
     return pressed;
   }
 
+  /** @returns {boolean} true if a dash was pressed since the last call */
+  consumeDash() {
+    const pressed = this.dashPresses > 0;
+    this.dashPresses = 0;
+    this.dashDir = 0; // read dashDir before calling this
+    return pressed;
+  }
+
   /** Forget queued presses (e.g. the Space that started a run). */
   clearPresses() {
     this.jumpPresses = 0;
+    this.dashPresses = 0;
+    this.dashDir = 0;
   }
 
   /** Release everything: used on blur, visibility loss, and run transitions. */
@@ -81,6 +96,8 @@ export class InputManager {
     this.held.clear();
     this.lastDir = 0;
     this.jumpPresses = 0;
+    this.dashPresses = 0;
+    this.dashDir = 0;
     this.touchAxis = 0;
     this.steerPointer = null;
   }
@@ -99,6 +116,11 @@ export class InputManager {
     if (JUMP.includes(e.code)) {
       this.jumpPresses++;
       this.emit('jump');
+    }
+    if (DASH.includes(e.code)) {
+      this.dashPresses++;
+      this.dashDir = 0; // keyboard dashes follow the held steering direction
+      this.emit('dash');
     }
     if (CONFIRM.includes(e.code)) this.emit('confirm');
     if (PAUSE.includes(e.code)) this.emit('pause');
@@ -128,7 +150,7 @@ export class InputManager {
       this.emit('jump');
       return;
     }
-    this.steerPointer = { id: e.pointerId, anchorX: e.clientX, startY: e.clientY, startT: e.timeStamp, swiped: false };
+    this.steerPointer = { id: e.pointerId, anchorX: e.clientX, startX: e.clientX, startY: e.clientY, startT: e.timeStamp, swiped: false, flicked: false };
     this.touchAxis = 0;
     if (this.surface && this.surface.setPointerCapture) {
       try {
@@ -151,6 +173,14 @@ export class InputManager {
       dx = Math.sign(dx) * range;
     }
     this.touchAxis = Math.max(-1, Math.min(1, dx / range));
+    // Quick horizontal flick = dash in that direction.
+    const fx = e.clientX - sp.startX;
+    if (!sp.flicked && Math.abs(fx) > range * 1.8 && e.timeStamp - sp.startT < 160) {
+      sp.flicked = true;
+      this.dashPresses++;
+      this.dashDir = Math.sign(fx);
+      this.emit('dash');
+    }
     // Quick upward swipe = jump (fires immediately, no release latency).
     const dy = e.clientY - sp.startY;
     if (!sp.swiped && dy < -range * 0.9 && e.timeStamp - sp.startT < 260) {
@@ -173,6 +203,15 @@ export class InputManager {
     e.stopPropagation();
     this.jumpPresses++;
     this.emit('jump');
+  }
+
+  handleDashButton(e) {
+    if (e.pointerType === 'touch') this.usingTouch = true;
+    e.preventDefault();
+    e.stopPropagation();
+    this.dashPresses++;
+    this.dashDir = 0;
+    this.emit('dash');
   }
 
   handleFocusLoss() {
@@ -199,6 +238,7 @@ export class InputManager {
     this.listen(this.surface, 'lostpointercapture', (e) => this.handlePointerEnd(e));
     this.listen(this.surface, 'contextmenu', (e) => e.preventDefault());
     this.listen(this.jumpButton, 'pointerdown', (e) => this.handleJumpButton(e), active);
+    this.listen(this.dashButton, 'pointerdown', (e) => this.handleDashButton(e), active);
     this.listen(this.win, 'blur', () => this.handleFocusLoss());
     this.listen(this.doc, 'visibilitychange', () => {
       if (this.doc.hidden) this.handleFocusLoss();

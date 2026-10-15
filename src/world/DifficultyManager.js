@@ -44,8 +44,8 @@ export function lerpLevel(level, easy, hard) {
  */
 export const UNLOCKS = Object.freeze({
   tutorial: 0,
-  slalom: 110,
-  hills: 150,
+  slalom: 135,
+  hills: 165,
   gate: 190,
   hurdle: 250,
   downhill: 300,

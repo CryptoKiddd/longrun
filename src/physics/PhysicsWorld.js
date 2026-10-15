@@ -28,6 +28,8 @@ export class StepEvents {
 
   reset() {
     this.jumped = false;
+    this.dashed = 0; // -1 / +1 lateral dash direction this step
+    this.slammed = false; // air dash straight down
     this.launched = false; // left the ground with upward speed (ramp lip / crest)
     this.landed = false;
     this.landingSpeed = 0;
@@ -56,6 +58,18 @@ export function stepForward(p, dt, world = FLAT_WORLD) {
  * @param {number} steer -1..1
  */
 export function stepHorizontal(p, steer, dt, cfg = PHYSICS) {
+  if (p.dashCooldown > 0) p.dashCooldown = Math.max(0, p.dashCooldown - dt);
+  if (p.dashTime > 0) {
+    // Burst: fixed lateral speed above the normal cap, then back to max speed.
+    p.dashTime -= dt;
+    p.vx = p.dashDir * cfg.DASH_SPEED;
+    if (p.dashTime <= 0) {
+      p.dashTime = 0;
+      p.vx = p.dashDir * cfg.LAT_MAX_SPEED;
+    }
+    p.x += p.vx * dt;
+    return;
+  }
   if (p.falling) steer = 0;
   const control = p.grounded ? 1 : cfg.AIR_CONTROL;
   if (steer !== 0) {
@@ -85,6 +99,7 @@ export function resolveRails(p, halfWidth, events, cfg = PHYSICS) {
   if (p.x > limit || p.x < -limit) {
     const side = Math.sign(p.x);
     p.x = side * limit;
+    p.dashTime = 0;
     if (p.vx * side > 0) {
       p.vx = -p.vx * cfg.RAIL_BOUNCE;
       if (events) events.railHit = true;
@@ -95,6 +110,29 @@ export function resolveRails(p, halfWidth, events, cfg = PHYSICS) {
 /** Register a jump press (buffered so slightly-early presses still count). */
 export function requestJump(p, cfg = PHYSICS) {
   p.jumpBuffer = cfg.JUMP_BUFFER;
+}
+
+/**
+ * Dash: a short lateral burst in the steer direction (works in the air too).
+ * Airborne with no direction it becomes a slam straight down. Cooldown-gated.
+ * @param {number} dir requested direction (-1, 0, +1), usually sign(steer)
+ * @returns {boolean} whether a dash happened
+ */
+export function tryDash(p, dir, events, cfg = PHYSICS) {
+  if (p.dashCooldown > 0 || p.falling || !p.alive) return false;
+  if (dir !== 0) {
+    p.dashDir = dir > 0 ? 1 : -1;
+    p.dashTime = cfg.DASH_TIME;
+    p.vx = p.dashDir * cfg.DASH_SPEED;
+    if (events) events.dashed = p.dashDir;
+  } else if (!p.grounded) {
+    p.vy = Math.min(p.vy, -cfg.SLAM_SPEED);
+    if (events) events.slammed = true;
+  } else {
+    return false;
+  }
+  p.dashCooldown = cfg.DASH_COOLDOWN;
+  return true;
 }
 
 /** Whether a normal jump is allowed right now (grounded or coyote time). */
@@ -263,7 +301,7 @@ export class PhysicsWorld {
 
   /**
    * @param {import('../entities/Player.js').Player} p
-   * @param {{ steer: number, jump: boolean }} intent
+   * @param {{ steer: number, jump: boolean, dash?: boolean, dashDir?: number }} intent
    * @returns {StepEvents}
    */
   step(p, intent, dt) {
@@ -272,6 +310,10 @@ export class PhysicsWorld {
     if (!p.alive) return ev;
     p.savePrevious();
     if (intent.jump) requestJump(p, this.cfg);
+    if (intent.dash) {
+      const dir = intent.dashDir || (intent.steer > 0.2 ? 1 : intent.steer < -0.2 ? -1 : 0);
+      tryDash(p, dir, ev, this.cfg);
+    }
 
     stepForward(p, dt, this.track);
     this.track.updateMovers(p.z);

@@ -150,3 +150,18 @@ test('input: second finger while steering is a jump', () => {
   input.handlePointerDown(ev(2));
   assert.equal(input.consumeJump(), true);
 });
+
+test('input: Shift dashes (no repeat); a fast horizontal flick dashes in its direction', () => {
+  const input = new InputManager({ surface: { clientWidth: 1000 } });
+  input.handleKeyDown(key('ShiftLeft'));
+  input.handleKeyDown(key('ShiftLeft', { repeat: true }));
+  assert.equal(input.dashDir, 0);
+  assert.equal(input.consumeDash(), true);
+  assert.equal(input.consumeDash(), false);
+  const ev = (x, t) => ({ pointerId: 1, pointerType: 'touch', clientX: x, clientY: 500, timeStamp: t, button: 0, preventDefault() {} });
+  input.handlePointerDown(ev(500, 0));
+  input.handlePointerMove(ev(420, 40));
+  input.handlePointerMove(ev(300, 80));
+  assert.equal(input.dashDir, -1);
+  assert.equal(input.consumeDash(), true);
+});

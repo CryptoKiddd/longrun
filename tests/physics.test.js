@@ -209,3 +209,55 @@ test('physics is consistent across different rendering frame rates', () => {
     assert.ok(Math.abs(r.p.x - ref.p.x) <= PHYSICS.LAT_MAX_SPEED * DT + 1e-6);
   }
 });
+
+test('dash: lateral burst above max speed for a short time, then back to max', async () => {
+  const { tryDash } = await import('../src/physics/PhysicsWorld.js');
+  const p = new Player();
+  const ev = new StepEvents();
+  assert.equal(tryDash(p, 1, ev), true);
+  assert.equal(ev.dashed, 1);
+  stepHorizontal(p, 0, DT);
+  assert.equal(p.vx, PHYSICS.DASH_SPEED);
+  let steps = 1;
+  while (p.dashTime > 0) {
+    stepHorizontal(p, 0, DT);
+    steps++;
+  }
+  assert.ok(Math.abs(steps * DT - PHYSICS.DASH_TIME) < 2 * DT);
+  assert.equal(p.vx, PHYSICS.LAT_MAX_SPEED);
+  assert.ok(p.x > 2.2 && p.x < 3, `dash distance ${p.x}`);
+});
+
+test('dash: cooldown blocks a second dash until it expires', async () => {
+  const { tryDash } = await import('../src/physics/PhysicsWorld.js');
+  const p = new Player();
+  assert.equal(tryDash(p, -1, null), true);
+  assert.equal(tryDash(p, -1, null), false);
+  for (let t = 0; t < PHYSICS.DASH_COOLDOWN + 0.05; t += DT) stepHorizontal(p, 0, DT);
+  assert.equal(tryDash(p, 1, null), true);
+});
+
+test('dash: no direction on the ground does nothing; in the air it slams down', async () => {
+  const { tryDash } = await import('../src/physics/PhysicsWorld.js');
+  const p = new Player();
+  assert.equal(tryDash(p, 0, null), false);
+  assert.equal(p.dashCooldown, 0, 'not consumed');
+  p.grounded = false;
+  p.y = 3;
+  p.vy = 4;
+  const ev = new StepEvents();
+  assert.equal(tryDash(p, 0, ev), true);
+  assert.equal(ev.slammed, true);
+  assert.equal(p.vy, -PHYSICS.SLAM_SPEED);
+});
+
+test('dash: hitting a rail ends the burst', async () => {
+  const { tryDash } = await import('../src/physics/PhysicsWorld.js');
+  const p = new Player();
+  p.x = 3.9;
+  tryDash(p, 1, null);
+  stepHorizontal(p, 0, DT);
+  resolveRails(p, 4.5, null);
+  assert.equal(p.dashTime, 0);
+  assert.ok(p.vx <= 0);
+});

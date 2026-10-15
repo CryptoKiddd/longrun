@@ -122,6 +122,6 @@ for (const seed of [3, 1234]) {
   test(`autopilot survives 3000 m of generated course (seed ${seed})`, () => {
     const sim = autopilot(seed, 3000);
     assert.equal(sim.over, false, `bot crashed (${sim.crashCause}) at z=${sim.player.z.toFixed(1)} x=${sim.player.x.toFixed(2)}; segments: ${sim.generator.log.join(',')}`);
-    assert.ok(sim.score.gatesTotal > 5, 'met gates along the way');
+    assert.ok(sim.generator.log.filter((id) => id !== 'runway' && id !== 'tutorial').length > 15, 'played through many hazard segments');
   });
 }
