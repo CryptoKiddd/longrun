@@ -12,6 +12,7 @@ A skill-and-precision endless runner for the browser. Roll a glowing energy ball
 | --- | --- | --- |
 | Steer | `←` `→` or `A` `D` | Drag anywhere (floating joystick) |
 | Jump | `Space` or `↑` / `W` | **JUMP** button, a second finger, or a quick upward swipe |
+| Dash | `Shift` (or `X` / `K`) while steering: a fast sidestep. In the air with no direction, a slam down. 1 s cooldown | **DASH** button, or a quick sideways flick |
 | Pause / resume | `Esc` or `P` | Pause button (top right) |
 | Start / restart | `Enter` or `Space` on the menu or results screen | Buttons |
 | Mute | `M` | Speaker button |

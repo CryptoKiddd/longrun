@@ -36,6 +36,16 @@ export class Camera {
     this.pitch = 0; // smoothed view tilt (grade ahead); pivots at the player's depth
   }
 
+  /**
+   * Widen the field of view with speed (and a kick while dashing): the world
+   * rushes past faster at the edges. 1 = base FOV, < 1 = wider.
+   */
+  setFov(target, dt) {
+    if (this.fov === undefined) this.fov = 1;
+    this.fov += (target - this.fov) * (1 - Math.exp(-5 * dt));
+    this.focal = this.baseFocal * this.fov;
+  }
+
   /** Screen y of the horizon including the current pitch. */
   get horizonEff() {
     return this.horizon + this.pitch * this.focal;
@@ -50,10 +60,11 @@ export class Camera {
     this.width = w;
     this.height = h;
     this.cx = w / 2;
-    this.focal = Math.min(h * 1.0, w * 0.64);
+    this.baseFocal = Math.min(h * 1.0, w * 0.64);
+    this.focal = this.baseFocal * (this.fov || 1);
     const portrait = Math.max(0, Math.min(1, (1.3 - w / h) / (1.3 - 0.46)));
     this.baseHeight = RENDER.CAMERA_HEIGHT + portrait * 3.4;
-    const playerDrop = (this.baseHeight * this.focal) / RENDER.CAMERA_BACK;
+    const playerDrop = (this.baseHeight * this.baseFocal) / RENDER.CAMERA_BACK;
     const horizon = h * 0.76 - playerDrop;
     this.horizon = Math.max(h * 0.26, Math.min(h * 0.5, horizon));
   }

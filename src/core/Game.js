@@ -40,7 +40,7 @@ export class Game {
     this.hud = new HUD();
     this.particles = new ParticleSystem();
     this.ghost = new GhostPlayback();
-    this.input = new InputManager({ keyTarget: win, surface: canvas, jumpButton: doc.getElementById('btn-jump'), doc, win });
+    this.input = new InputManager({ keyTarget: win, surface: canvas, jumpButton: doc.getElementById('btn-jump'), dashButton: doc.getElementById('btn-dash'), doc, win });
     this.ui = new UI(doc, {
       play: () => this.startRun(),
       resume: () => this.resume(),
@@ -56,7 +56,7 @@ export class Game {
       frameUpdate: (dt, alpha) => this.frameUpdate(dt, alpha),
     });
 
-    this.intent = { steer: 0, jump: false };
+    this.intent = { steer: 0, jump: false, dash: false, dashDir: 0 };
     this.time = 0;
     this.trail = { x: new Float32Array(TRAIL_SIZE), y: new Float32Array(TRAIL_SIZE), z: new Float32Array(TRAIL_SIZE), head: 0, count: 0, size: TRAIL_SIZE, lastZ: -1 };
     this.texts = Array.from({ length: TEXT_POOL }, () => ({ text: '', color: '#fff', x: 0, y: 0, z: 0, life: 0, maxLife: 1, scale: 1 }));
@@ -263,6 +263,9 @@ export class Game {
     if (!this.fsm.simulating) return;
     this.intent.steer = this.input.steer;
     this.intent.jump = this.input.consumeJump();
+    const dashDir = this.input.dashDir;
+    this.intent.dash = this.input.consumeDash();
+    this.intent.dashDir = this.intent.dash ? dashDir : 0;
     this.sim.step(dt, this.intent);
     this.processNotices();
     if (this.sim.over) this.endRun();
@@ -296,6 +299,17 @@ export class Game {
           this.audio.jump();
           this.jumpedThisRun = true;
           this.particles.burst(p.x, p.y + 0.05, p.z, 6, 2, 0.35, 0.3, PC.CYAN, p.vz * 0.6);
+          break;
+        case 'dash': {
+          this.audio.dash();
+          this.dashedThisRun = true;
+          this.particles.burst(p.x - n.dir * 0.4, p.y + p.radius, p.z, 16, 4, 0.35, 0.35, PC.WHITE, p.vz * 0.85);
+          if (fx) this.shake = Math.max(this.shake, 0.1);
+          break;
+        }
+        case 'slam':
+          this.audio.slam();
+          this.particles.burst(p.x, p.y + p.radius, p.z, 12, 3, 0.4, 0.35, PC.CYAN, p.vz * 0.8);
           break;
         case 'launch':
           this.audio.launch();
@@ -341,6 +355,7 @@ export class Game {
     this.gameOverTimer = 0;
     this.toastTime = 0;
     this.jumpedThisRun = false;
+    this.dashedThisRun = false;
     this.unlockedThisRun = [];
     this.trail.count = 0;
     this.trail.head = 0;
@@ -426,6 +441,9 @@ export class Game {
     }
 
     this.renderer.camera.follow(px, py, pz, dt, state === State.READY, sim.track);
+    const speed01 = playing ? Math.max(0, Math.min(1, (p.vz - SPEED.MIN) / (SPEED.MAX - SPEED.MIN))) : 0;
+    const dashing = playing && p.dashTime > 0;
+    this.renderer.camera.setFov(fx ? 1 - 0.1 * speed01 - (dashing ? 0.07 : 0) : 1, dt);
 
     // Ghost of the best run (same distance as the player).
     if (playing && this.progression.settings.ghost) this.ghost.sample(pz);
@@ -441,6 +459,8 @@ export class Game {
     v.playerMarker.z = pz;
     v.skin = this.progression.skin;
     v.reducedEffects = !fx;
+    v.speed01 = speed01;
+    v.dashing = dashing;
     v.squash = this.squash;
     v.roll = this.roll;
     v.bank = this.bank;
@@ -507,6 +527,9 @@ export class Game {
     h.streak = sc.streak;
     h.distance = sc.distance;
     h.speed = sim.player.vz;
+    h.dash01 = 1 - sim.player.dashCooldown / PHYSICS.DASH_COOLDOWN;
+    h.dashKey = this.ui.touch ? 'FLICK' : 'SHIFT';
+    this.ui.setDashReady(sim.player.dashCooldown <= 0);
     h.toastAlpha = this.toastTime > 0 ? Math.min(1, this.toastTime * 2, (3 - this.toastTime) * 4) : 0;
 
     if (!this.passedBestNotified && this.bestAtStart > 0 && sc.total > this.bestAtStart && this.fsm.is(State.PLAYING)) {
@@ -531,6 +554,9 @@ export class Game {
     } else if (sc.gatesTotal === 0 && track.gates.some((g) => g.z > pz && g.z < pz + lookahead)) {
       h.hint = 'Fly through the centre of gates';
       h.hintAlpha = 1;
+    } else if (!this.dashedThisRun && sim.time > 8 && sim.time < 14) {
+      h.hint = touch ? 'Flick sideways or tap DASH to dash' : 'SHIFT + \u2190 / \u2192  to dash';
+      h.hintAlpha = Math.min(1, (sim.time - 8) * 2, (14 - sim.time) * 2);
     }
   }
 

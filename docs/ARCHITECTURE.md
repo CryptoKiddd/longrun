@@ -50,6 +50,7 @@ The renderer projects world coordinates to screen space through `Camera.project`
 | World progression | `stepForward` | `vz = speedAt(z) + slopeBonus(grade)`; downhill is faster. Still a pure function of distance and terrain |
 | Movers | `Track.updateMovers` | `x = base + amp·sin(freq·(playerZ − z0) + phase)` |
 | Lateral | `stepHorizontal` | accel 55 m/s² (95 when reversing), max 9 m/s, exponential friction only without input, 65 % air control |
+| Dash | `tryDash` | lateral burst at 19 m/s for 0.14 s (~2.7 m), or a 16 m/s slam when airborne with no direction; 1 s cooldown. The validator never relies on it, so it only adds options |
 | Rails | `resolveRails` | clamp and reflect 25 % of lateral speed |
 | Vertical | `stepVertical` | Grounded balls follow the surface while gravity can hold them (`v^2 * H'' >= -g`). They leave the ground at sharp crests, ramp lips and drop-offs, keeping their vertical speed. A jump **adds** 8 m/s to the current vertical speed, so jumping at a ramp lip goes higher. Also: 0.12 s jump buffer, 0.08 s coyote time, semi-implicit Euler, a landing lip that scales with relative speed (no tunnelling), falls into holes, and crashes into platform sides |
 | Collisions | `detectCollisions` | swept sphere vs AABB (movers in their own frame), swept orb pickup, gate-plane crossing with accuracy |

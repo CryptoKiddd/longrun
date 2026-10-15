@@ -780,6 +780,25 @@ body:not(.touch) .touch-only {
   color: var(--ink);
 }
 
+.dash-btn {
+  width: 78px;
+  height: 78px;
+  right: calc(140px + var(--safe-right));
+  bottom: calc(44px + var(--safe-bottom));
+}
+
+.dash-btn::before {
+  background: rgba(255, 46, 136, 0.85);
+}
+
+.dash-btn span {
+  font-size: 12px;
+}
+
+.dash-btn.cooling {
+  opacity: 0.4;
+}
+
 .jump-btn:active::after {
   background: radial-gradient(circle at 50% 40%, rgba(34, 228, 255, 0.75), rgba(2, 3, 11, 0.6) 75%);
 }

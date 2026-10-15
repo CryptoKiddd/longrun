@@ -40,8 +40,8 @@ Objects fade in over the last 30 m of the 170 m draw distance, so nothing appear
 
 ## Difficulty
 
-- Difficulty is `1 − (1 − d/3800)^1.7`, where `d` is distance. It rises quickly early, then plateaus.
-- Forward speed goes from 16 m/s to 36 m/s along the same curve. Downhill grades add up to +5.6 m/s; uphills slow you.
+- Difficulty is `1 − (1 − d/3600)^1.7`, where `d` is distance. It rises quickly early, then plateaus.
+- Forward speed goes from 22 m/s to 38 m/s along the same curve (difficulty ramp over 3.6 km). Downhill grades add up to +5.6 m/s; uphills slow you.
 - Hazard spacing (1.0 s → 0.5 s), gate width (2.9 m → 1.9 m, always visible), slalom wall width, mover speed, ramp steepness and gap length, and drop height each scale with level. They are tuned separately rather than all at once.
 - Hitboxes never change with difficulty.
 - A fatigue budget inserts a recovery runway after demanding stretches. The budget allows longer stretches as level rises.

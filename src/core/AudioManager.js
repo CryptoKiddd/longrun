@@ -168,6 +168,17 @@ export class AudioManager {
     this.tone(1046.5, 0.22, { type: 'triangle', gain: 0.14, delay: 0.1 });
   }
 
+  /** Short, bright swish for a lateral dash. */
+  dash() {
+    this.noise(0.18, { gain: 0.16, filter: 5000, endFilter: 900 });
+    this.tone(700, 0.12, { type: 'triangle', gain: 0.06, endFreq: 1400 });
+  }
+
+  /** Heavy downward slam. */
+  slam() {
+    this.tone(220, 0.25, { type: 'sine', gain: 0.18, endFreq: 70 });
+  }
+
   /** Airy whoosh when a ramp or crest launches the ball. */
   launch() {
     this.noise(0.45, { gain: 0.12, filter: 3000, endFilter: 400 });

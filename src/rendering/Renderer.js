@@ -1,7 +1,7 @@
 import { RENDER, TRACK } from '../config.js';
 import { GATE_HEIGHT, GATE_POST_WIDTH } from '../world/Track.js';
 import { Camera } from './Camera.js';
-import { glowSprite, ballSprite, shadowSprite, withAlpha, mix, hslToHex } from './sprites.js';
+import { glowSprite, ballSprite, obstacleTexture, TEX_PPM, withAlpha, mix, hslToHex } from './sprites.js';
 import { FONT_DISPLAY } from '../ui/fonts.js';
 
 /**
@@ -41,9 +41,19 @@ export const PC = Object.freeze({ CYAN: 0, AMBER: 1, MAGENTA: 2, VIOLET: 3, WHIT
 const FAR = TRACK.VIEW_AHEAD;
 const MAX_SLICES = Math.ceil(FAR / RENDER.SLICE) + 24;
 const QUALITY_SCALE = [0.7, 0.85, 1];
-const RAIL_BUCKETS = 4;
-const RAIL_ALPHA = [1, 0.62, 0.32, 0.12];
 const H = TRACK.HALF_WIDTH;
+const CURB_H = 0.34; // m, raised border height
+const CURB_W = 0.32; // m, border width (outside the deck)
+const LIGHT_SPACING = 6; // m between curb running lights
+const PULSE_HZ = 1.4; // the ball's heartbeat
+
+/** Solid, textured obstacle materials: front texture + shaded side/top. */
+const MATERIALS = {
+  wall: { edge: '#ff2e88', top: '#6a1a4c', side: '#1f0718' },
+  hurdle: { edge: '#ff9cc4', top: '#ff5a9e', side: '#7c1443' },
+  mover: { edge: '#ffb37a', top: '#ffa060', side: '#7a3610' },
+  post: { edge: '#c9b3ff', top: '#8a6ae0', side: '#22175a' },
+};
 
 function pt() {
   return { x: 0, y: 0, s: 0, visible: false };
@@ -81,7 +91,23 @@ export class Renderer {
     this.particleSprites = PARTICLE_COLORS.map((c) => glowSprite(c, 64));
     this.orbGlow = glowSprite(PALETTE.orb, 96);
     this.orbCore = ballSprite('#fff4d0', '#ffb02e', 64);
-    this.shadow = shadowSprite(128);
+    this.whiteGlow = glowSprite('#ffffff', 64);
+    this.lightSprite = glowSprite('#7ffcff', 64);
+    this.patterns = {};
+    for (const kind of Object.keys(MATERIALS)) {
+      try {
+        this.patterns[kind] = this.ctx.createPattern(obstacleTexture(kind), 'repeat');
+      } catch {
+        this.patterns[kind] = null; // solid colour fallback
+      }
+    }
+    this.curbFace = [];
+    this.curbTop = [];
+    for (let i = 0; i < FOG_LEVELS; i++) {
+      const t = Math.pow(i / (FOG_LEVELS - 1), 0.8);
+      this.curbFace.push(mix('#0d1747', PALETTE.fog, t));
+      this.curbTop.push(mix('#22378f', PALETTE.fog, t));
+    }
   }
 
   // ---- setup ------------------------------------------------------------
@@ -180,10 +206,12 @@ export class Renderer {
     this.buildSlices(v.track);
     this.drawTrack(v.track);
     this.drawHoles(v.track);
+    this.drawCurbs(v.track, v.time);
     this.drawLips(v.track);
     if (v.bestDistance > 50) this.drawBestMarker(v.track, v.bestDistance);
     this.drawObjects(v);
     this.drawParticles(v.particles);
+    this.drawSpeedLines(v);
     this.drawTexts(v.texts);
     ctx.restore();
 
@@ -366,55 +394,96 @@ export class Renderer {
     ctx.strokeStyle = withAlpha(PALETTE.lane, 0.28);
     ctx.lineWidth = 1;
     ctx.stroke();
+  }
 
-    this.drawRails();
+  /** Is the deck edge on `side` (-1 left, +1 right) cut away by a hole over [z0, z1]? */
+  edgeCut(track, side, z0, z1) {
+    for (const h of track.holes) {
+      if (h.z1 < z0 || h.z0 > z1) continue;
+      if (side < 0 ? h.x0 <= -H + 0.01 : h.x1 >= H - 0.01) return true;
+    }
+    return false;
   }
 
   /**
-   * Edges as soft light bands in world units (perspective-correct width),
-   * fading with distance and blended additively — no hard outlines.
+   * Raised borders: a solid curb along each deck edge (inner face + top),
+   * a crisp lit lip, and running lights every few metres for speed.
    */
-  drawRails() {
+  drawCurbs(track, time) {
     const ctx = this.ctx;
     const cam = this.camera;
     const n = this.sCount;
-    const bands = this.quality > 0
-      ? [
-          [-0.7, 0, 0.05], // halo spilling into the void
-          [0, 0.75, 0.07], // inner glow on the deck
-          [0, 0.14, 0.42], // bright edge core
-        ]
-      : [[0, 0.14, 0.45]];
-    ctx.globalCompositeOperation = 'lighter';
-    for (let b = 0; b < RAIL_BUCKETS; b++) {
-      for (const [inA, inB, alpha] of bands) {
+    const lip = [];
+    for (let i = 0; i < n - 1; i++) {
+      const zf = this.sZ[i];
+      const zn = this.sZ[i + 1];
+      if (zf - zn < 1e-6) continue;
+      const sf = this.sS[i];
+      const sn = this.sS[i + 1];
+      const fog = Math.max(0, Math.min(1, (zf - cam.z - 30) / (FAR - 30)));
+      const fi = Math.round(fog * (FOG_LEVELS - 1));
+      for (const side of [-1, 1]) {
+        if (this.edgeCut(track, side, zn, zf)) continue;
+        const xf = side < 0 ? this.sLB[i] : this.sRB[i];
+        const xn = side < 0 ? this.sLA[i + 1] : this.sRA[i + 1];
+        const yf = this.sYB[i];
+        const yn = this.sYA[i + 1];
+        const tf = yf - CURB_H * sf;
+        const tn = yn - CURB_H * sn;
+        const of = xf + side * CURB_W * sf;
+        const on = xn + side * CURB_W * sn;
+        // Inner face (faces the player).
+        ctx.fillStyle = this.curbFace[fi];
         ctx.beginPath();
-        let any = false;
-        for (let i = 0; i < n - 1; i++) {
-          const dz = this.sZ[i] - cam.z;
-          const bucket = Math.min(RAIL_BUCKETS - 1, Math.floor((dz / FAR) * RAIL_BUCKETS * 1.15));
-          if (bucket !== b || this.sZ[i] - this.sZ[i + 1] < 1e-6) continue;
-          any = true;
-          // Interpolate band edges across the deck (fraction of full width).
-          const fa = inA / (2 * H);
-          const fb = inB / (2 * H);
-          for (const side of [0, 1]) {
-            const lF = side ? this.sRB[i] : this.sLB[i];
-            const wF = (this.sRB[i] - this.sLB[i]) * (side ? -1 : 1);
-            const lN = side ? this.sRA[i + 1] : this.sLA[i + 1];
-            const wN = (this.sRA[i + 1] - this.sLA[i + 1]) * (side ? -1 : 1);
-            ctx.moveTo(lF + wF * fa, this.sYB[i]);
-            ctx.lineTo(lF + wF * fb, this.sYB[i]);
-            ctx.lineTo(lN + wN * fb, this.sYA[i + 1] + 0.5);
-            ctx.lineTo(lN + wN * fa, this.sYA[i + 1] + 0.5);
-            ctx.closePath();
-          }
-        }
-        if (!any) continue;
-        ctx.fillStyle = withAlpha(PALETTE.rail, alpha * RAIL_ALPHA[b]);
+        ctx.moveTo(xf, yf);
+        ctx.lineTo(xf, tf);
+        ctx.lineTo(xn, tn);
+        ctx.lineTo(xn, yn + 0.5);
+        ctx.closePath();
         ctx.fill();
+        // Top.
+        ctx.fillStyle = this.curbTop[fi];
+        ctx.beginPath();
+        ctx.moveTo(xf, tf);
+        ctx.lineTo(of, tf);
+        ctx.lineTo(on, tn);
+        ctx.lineTo(xn, tn);
+        ctx.closePath();
+        ctx.fill();
+        lip.push(xf, tf, xn, tn, 1 - fog);
       }
     }
+    // Lit inner lip, faded with distance (additive so it blends, not outlines).
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineCap = 'round';
+    for (let k = 0; k < lip.length; k += 5) {
+      const a = lip[k + 4];
+      if (a <= 0.02) continue;
+      ctx.strokeStyle = withAlpha(PALETTE.rail, 0.75 * a * a);
+      ctx.lineWidth = 1 + 2.2 * a;
+      ctx.beginPath();
+      ctx.moveTo(lip[k], lip[k + 1]);
+      ctx.lineTo(lip[k + 2], lip[k + 3]);
+      ctx.stroke();
+    }
+    ctx.lineCap = 'butt';
+    // Running lights: they stream past and sell the speed.
+    const P = this.P;
+    const first = Math.ceil((cam.z + cam.near + 1) / LIGHT_SPACING) * LIGHT_SPACING;
+    const beat = 0.75 + 0.25 * Math.sin(time * Math.PI * 2 * PULSE_HZ);
+    for (let z = first; z < cam.z + FAR * 0.8; z += LIGHT_SPACING) {
+      const y = track.heightAt(z) + CURB_H;
+      const a = this.fade(z) * Math.max(0, 1 - (z - cam.z) / (FAR * 0.8));
+      for (const side of [-1, 1]) {
+        if (this.edgeCut(track, side, z - 0.5, z + 0.5)) continue;
+        cam.project(side * (H + CURB_W * 0.5), y, z, P[0]);
+        if (!P[0].visible) continue;
+        const sz = Math.max(3, P[0].s * 0.9);
+        ctx.globalAlpha = a * beat;
+        ctx.drawImage(this.lightSprite, P[0].x - sz / 2, P[0].y - sz / 2, sz, sz);
+      }
+    }
+    ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
   }
 
@@ -574,38 +643,31 @@ export class Renderer {
     const nearZ = cam.z + cam.near + 0.02;
     const alpha = this.fade(o.z0);
     if (alpha <= 0) return;
-    let color = PALETTE.danger;
-    let fillA = 0.24;
-    if (o.kind === 'hurdle') {
-      color = PALETTE.dangerSoft;
-      fillA = 0.5;
-    } else if (o.kind === 'mover') {
-      color = PALETTE.mover;
-      fillA = 0.42;
-    } else if (o.kind === 'post') {
-      const g = o.gate;
-      color = g && g.resolved ? tierColor(g.result) : PALETTE.gate;
-      fillA = 0.55;
-    }
-    if (o.hitFlash > 0) color = PALETTE.white;
+    const mat = MATERIALS[o.kind] || MATERIALS.wall;
+    let edge = mat.edge;
+    if (o.kind === 'post' && o.gate && o.gate.resolved) edge = tierColor(o.gate.result);
     const x0 = o.x - o.w / 2;
     const x1 = o.x + o.w / 2;
     const zEnd = o.z1;
     const zStart = Math.max(o.z0, nearZ);
     if (zEnd <= zStart) return;
+    const fog = Math.max(0, Math.min(1, (o.z0 - cam.z - 30) / (FAR - 30)));
     // Split long boxes so they follow the cosmetic curve and the terrain.
     const chunks = Math.max(1, Math.ceil((zEnd - zStart) / 4));
+    this.ctx.globalAlpha = alpha;
     for (let c = chunks - 1; c >= 0; c--) {
       const za = zStart + ((zEnd - zStart) * c) / chunks;
       const zb = zStart + ((zEnd - zStart) * (c + 1)) / chunks;
-      this.drawBoxChunk(x0, x1, o.h, za, zb, track.heightAt(za), track.heightAt(zb), color, fillA * alpha, alpha, c === 0, o.kind === 'mover' ? time : -1);
+      this.drawBoxChunk(o, mat, edge, x0, x1, za, zb, track.heightAt(za), track.heightAt(zb), fog, alpha, c === 0, o.z0 >= nearZ, time);
     }
+    this.ctx.globalAlpha = 1;
   }
 
-  drawBoxChunk(x0, x1, h, zn, zf, bn, bf, color, fillA, alpha, front, pulseTime) {
+  drawBoxChunk(o, mat, edge, x0, x1, zn, zf, bn, bf, fog, alpha, front, frontIsReal, time) {
     const ctx = this.ctx;
     const cam = this.camera;
     const P = this.P;
+    const h = o.h;
     const nTL = cam.project(x0, bn + h, zn, P[0]);
     const nTR = cam.project(x1, bn + h, zn, P[1]);
     const nBR = cam.project(x1, bn, zn, P[2]);
@@ -623,40 +685,80 @@ export class Renderer {
       ctx.lineTo(d.x, d.y);
       ctx.closePath();
     };
-    ctx.fillStyle = color;
+    const side = fog > 0.02 ? mix(mat.side, PALETTE.fog, fog * 0.7) : mat.side;
+    const top = fog > 0.02 ? mix(mat.top, PALETTE.fog, fog * 0.7) : mat.top;
+    ctx.fillStyle = side;
     if (fBL.x < nBL.x) {
       quad(nTL, fTL, fBL, nBL);
-      ctx.globalAlpha = fillA * 0.7;
       ctx.fill();
     }
     if (fBR.x > nBR.x) {
       quad(nTR, fTR, fBR, nBR);
-      ctx.globalAlpha = fillA * 0.7;
       ctx.fill();
     }
     if (fTL.y < nTL.y) {
+      ctx.fillStyle = top;
       quad(nTL, nTR, fTR, fTL);
-      ctx.globalAlpha = Math.min(1, fillA * 1.6);
       ctx.fill();
     }
-    ctx.globalAlpha = 1;
-    const lw = Math.max(1, Math.min(3, nTL.s * 0.05));
+    const lw = Math.max(1, Math.min(3, nTL.s * 0.045));
+    if (front) {
+      // Front faces are screen-aligned: map the tile texture exactly.
+      const w = nTR.x - nTL.x;
+      const hh = nBL.y - nTL.y;
+      const pattern = this.patterns[o.kind];
+      if (pattern && nTL.s > 10 && frontIsReal) {
+        const k = nTL.s / TEX_PPM;
+        ctx.save();
+        ctx.translate(nTL.x, nTL.y);
+        ctx.scale(k, k);
+        ctx.fillStyle = pattern;
+        ctx.fillRect(0, 0, w / k, hh / k);
+        ctx.restore();
+      } else {
+        ctx.fillStyle = mat.side;
+        ctx.fillRect(nTL.x, nTL.y, w, hh);
+      }
+      if (fog > 0.02) {
+        ctx.globalAlpha = alpha * fog * 0.75;
+        ctx.fillStyle = PALETTE.fog;
+        ctx.fillRect(nTL.x, nTL.y, w, hh);
+        ctx.globalAlpha = alpha;
+      }
+      if (o.hitFlash > 0) {
+        ctx.globalAlpha = alpha * o.hitFlash * 0.8;
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(nTL.x, nTL.y, w, hh);
+        ctx.globalAlpha = alpha;
+      }
+      if (o.kind === 'mover') {
+        ctx.globalAlpha = alpha * (0.15 + 0.12 * Math.sin(time * 8));
+        ctx.fillStyle = mat.edge;
+        ctx.fillRect(nTL.x, nTL.y, w, hh);
+        ctx.globalAlpha = alpha;
+      }
+      // Emissive top edge + crisp silhouette.
+      ctx.beginPath();
+      ctx.moveTo(nTL.x, nTL.y);
+      ctx.lineTo(nTR.x, nTR.y);
+      this.neon(edge, lw * 1.3, alpha);
+      ctx.beginPath();
+      ctx.moveTo(nTL.x, nTL.y);
+      ctx.lineTo(nBL.x, nBL.y);
+      ctx.moveTo(nTR.x, nTR.y);
+      ctx.lineTo(nBR.x, nBR.y);
+      ctx.strokeStyle = withAlpha(edge, 0.55);
+      ctx.lineWidth = lw * 0.7;
+      ctx.stroke();
+    }
     ctx.beginPath();
-    ctx.moveTo(fTL.x, fTL.y);
-    ctx.lineTo(fTR.x, fTR.y);
     ctx.moveTo(nTL.x, nTL.y);
     ctx.lineTo(fTL.x, fTL.y);
-    ctx.moveTo(nTR.x, nTR.y);
     ctx.lineTo(fTR.x, fTR.y);
-    this.neon(color, lw * 0.8, alpha * 0.8);
-    if (front) {
-      quad(nTL, nTR, nBR, nBL);
-      const pulse = pulseTime >= 0 ? 0.08 * Math.sin(pulseTime * 8) : 0;
-      ctx.globalAlpha = Math.min(1, fillA + pulse);
-      ctx.fill();
-      ctx.globalAlpha = 1;
-      this.neon(color, lw, alpha);
-    }
+    ctx.lineTo(nTR.x, nTR.y);
+    ctx.strokeStyle = withAlpha(edge, 0.7);
+    ctx.lineWidth = lw * 0.8;
+    ctx.stroke();
   }
 
   drawGateFrame(track, g) {
@@ -751,17 +853,30 @@ export class Renderer {
 
     if (!v.playerVisible) return;
 
-    // Soft contact shadow on the deck: widens and fades with height.
+    // Light pool + heartbeat ring on the deck (a glowing ball lights the
+    // floor instead of casting a dark shadow).
+    const pulse = 0.5 + 0.5 * Math.sin(v.time * Math.PI * 2 * PULSE_HZ);
+    const height = Math.max(0, v.py - v.groundY);
     if (v.shadow) {
-      const sh = cam.project(v.px, v.groundY, v.pz, this.q);
+      const sh = cam.project(v.px, v.groundY + 0.02, v.pz, this.q);
       if (sh.visible) {
-        const height = Math.max(0, v.py - v.groundY);
-        const k = 1 / (1 + height * 0.45);
-        const w = r * sh.s * (2.6 + height * 0.5);
-        const hgt = w * 0.32;
-        ctx.globalAlpha = 0.7 * k * v.playerAlpha;
-        ctx.drawImage(this.shadow, sh.x - w / 2, sh.y - hgt / 2, w, hgt);
+        ctx.globalCompositeOperation = 'lighter';
+        const k = 1 / (1 + height * 0.5);
+        const w = r * sh.s * (7 + height * 2);
+        ctx.globalAlpha = (0.38 + 0.18 * pulse) * k * v.playerAlpha;
+        ctx.drawImage(glowSprite(colors.glow, 128), sh.x - w / 2, sh.y - w * 0.14, w, w * 0.28);
+        if (height < 0.6 && !v.reducedEffects) {
+          const phase = (v.time * PULSE_HZ) % 1;
+          const rx = (r * 1.3 + phase * 1.7) * sh.s;
+          ctx.globalAlpha = (1 - phase) * 0.55 * k * v.playerAlpha;
+          ctx.strokeStyle = colors.glow;
+          ctx.lineWidth = Math.max(1, 2.5 * (1 - phase));
+          ctx.beginPath();
+          ctx.ellipse(sh.x, sh.y, rx, rx * 0.26, 0, 0, Math.PI * 2);
+          ctx.stroke();
+        }
         ctx.globalAlpha = 1;
+        ctx.globalCompositeOperation = 'source-over';
       }
     }
 
@@ -773,8 +888,8 @@ export class Renderer {
       const tq = cam.project(trail.x[idx], trail.y[idx] + r, trail.z[idx], this.q);
       if (!tq.visible) continue;
       const k = 1 - i / trail.size;
-      const sz = r * tq.s * 2.2 * k;
-      ctx.globalAlpha = 0.26 * k;
+      const sz = r * tq.s * (v.dashing ? 2.8 : 2.2) * k;
+      ctx.globalAlpha = (v.dashing ? 0.6 : 0.26) * k;
       ctx.drawImage(trailSprite, tq.x - sz / 2, tq.y - sz / 2, sz, sz);
     }
 
@@ -785,9 +900,14 @@ export class Renderer {
       return;
     }
     const pr = r * q.s;
-    const glow = pr * 4.2;
-    ctx.globalAlpha = 0.5 * v.playerAlpha;
-    ctx.drawImage(glowSprite(colors.glow, 128), q.x - glow / 2, q.y - glow / 2, glow, glow);
+    // Bloom like the orbs: wide soft halo + pulsing inner halo.
+    const glowSpr = glowSprite(colors.glow, 128);
+    const bloom = pr * 9.5;
+    ctx.globalAlpha = (0.22 + 0.12 * pulse) * v.playerAlpha;
+    ctx.drawImage(glowSpr, q.x - bloom / 2, q.y - bloom / 2, bloom, bloom);
+    const glow = pr * (4.4 + 1.3 * pulse);
+    ctx.globalAlpha = (0.62 + 0.3 * pulse) * v.playerAlpha;
+    ctx.drawImage(glowSpr, q.x - glow / 2, q.y - glow / 2, glow, glow);
     ctx.globalCompositeOperation = 'source-over';
 
     const sx = pr * (1 + v.squash * 0.25);
@@ -807,7 +927,43 @@ export class Renderer {
       ctx.ellipse(q.x, q.y + (pr - sy) + yo, wv, Math.max(1, pr * 0.16 * c), 0, 0, Math.PI);
       ctx.stroke();
     }
+    // Hot white core that beats with the pulse.
+    ctx.globalCompositeOperation = 'lighter';
+    const core = pr * (1.5 + 0.5 * pulse);
+    ctx.globalAlpha = (0.35 + 0.4 * pulse) * v.playerAlpha;
+    ctx.drawImage(this.whiteGlow, q.x - core / 2, q.y - core / 2 - pr * 0.1, core, core);
+    ctx.globalCompositeOperation = 'source-over';
     ctx.globalAlpha = 1;
+  }
+
+  /** Screen-space streaks radiating from the vanishing point at speed. */
+  drawSpeedLines(v) {
+    const intensity = v.reducedEffects ? 0 : v.speed01 * 0.45 + (v.dashing ? 0.6 : 0);
+    if (intensity < 0.04) return;
+    const ctx = this.ctx;
+    const cam = this.camera;
+    const cx = cam.cx;
+    const cy = cam.horizonEff;
+    const diag = Math.hypot(this.cssW, this.cssH);
+    const rate = 1.1 + v.speed01 * 1.8;
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.strokeStyle = '#cfefff';
+    ctx.lineWidth = 1.5;
+    for (let i = 0; i < 28; i++) {
+      const ang = i * 2.39996 + 0.4;
+      const ph = (v.time * rate + i * 0.618) % 1;
+      const d0 = (0.3 + 0.9 * ph) * diag * 0.6;
+      const len = (0.03 + 0.12 * ph) * diag * (0.6 + intensity);
+      const dx = Math.cos(ang);
+      const dy = Math.sin(ang) * 0.75;
+      ctx.globalAlpha = Math.min(0.5, intensity * ph * 0.7);
+      ctx.beginPath();
+      ctx.moveTo(cx + dx * d0, cy + dy * d0);
+      ctx.lineTo(cx + dx * (d0 + len), cy + dy * (d0 + len));
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
   }
 
   drawParticles(ps) {

@@ -36,6 +36,7 @@ export class UI {
       },
       hudControls: $('hud-controls'),
       jump: $('btn-jump'),
+      dash: $('btn-dash'),
       mute: $('btn-mute'),
       menuBest: $('menu-best'),
       menuBestDist: $('menu-best-dist'),
@@ -96,6 +97,7 @@ export class UI {
     const playing = name === null;
     this.el.hudControls.hidden = !playing;
     this.el.jump.hidden = !(playing && this.touch);
+    this.el.dash.hidden = !(playing && this.touch);
     // Never auto-focus buttons: a key held through a crash would otherwise
     // auto-repeat onto "Run again". Enter/Space are handled by the game's
     // non-repeating 'confirm' action; Tab still reaches every button.
@@ -108,6 +110,14 @@ export class UI {
     this.touch = on;
     this.doc.body.classList.toggle('touch', on);
     this.el.jump.hidden = !(on && this.current === null);
+    this.el.dash.hidden = !(on && this.current === null);
+  }
+
+  /** Toggle the touch DASH button's ready state (only on change). */
+  setDashReady(ready) {
+    if (this.dashReady === ready) return;
+    this.dashReady = ready;
+    this.el.dash.classList.toggle('cooling', !ready);
   }
 
   setMuted(muted) {

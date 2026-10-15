@@ -97,3 +97,101 @@ export function hslToHex(h, s, l) {
   const f = (n) => Math.round(255 * (l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)))));
   return `#${((1 << 24) | (f(0) << 16) | (f(8) << 8) | f(4)).toString(16).slice(1)}`;
 }
+
+/** Pixels per metre of the obstacle texture tiles. */
+export const TEX_PPM = 128;
+
+/**
+ * Procedural, tileable 1 m x 1 m surface textures for obstacle fronts.
+ * Drawn once; the renderer maps them onto screen-aligned front faces exactly.
+ */
+export function obstacleTexture(kind) {
+  const key = `tex:${kind}`;
+  let c = cache.get(key);
+  if (c) return c;
+  const S = TEX_PPM;
+  c = makeCanvas(S);
+  const g = c.getContext('2d');
+  const stripes = (a, b, width, period) => {
+    g.fillStyle = b;
+    g.fillRect(0, 0, S, S);
+    g.fillStyle = a;
+    for (let k = -S; k < 2 * S; k += period) {
+      g.beginPath();
+      g.moveTo(k, S);
+      g.lineTo(k + width, S);
+      g.lineTo(k + width + S, 0);
+      g.lineTo(k + S, 0);
+      g.closePath();
+      g.fill();
+    }
+  };
+  if (kind === 'wall') {
+    const grad = g.createLinearGradient(0, 0, 0, S);
+    grad.addColorStop(0, '#3a0d2b');
+    grad.addColorStop(1, '#16040f');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, S, S);
+    // Energy grain: fine diagonal lines.
+    g.strokeStyle = 'rgba(255,46,136,0.14)';
+    g.lineWidth = 6;
+    for (let k = -S; k < 2 * S; k += 22) {
+      g.beginPath();
+      g.moveTo(k, S);
+      g.lineTo(k + S, 0);
+      g.stroke();
+    }
+    // Panel seams, bevel and rivets.
+    g.strokeStyle = 'rgba(0,0,0,0.55)';
+    g.lineWidth = 4;
+    g.strokeRect(2, 2, S - 4, S - 4);
+    g.strokeStyle = 'rgba(255,110,180,0.45)';
+    g.lineWidth = 2;
+    g.strokeRect(7, 7, S - 14, S - 14);
+    g.fillStyle = 'rgba(255,170,210,0.8)';
+    for (const [x, y] of [[13, 13], [S - 17, 13], [13, S - 17], [S - 17, S - 17]]) g.fillRect(x, y, 4, 4);
+    // Glowing core slot.
+    g.fillStyle = 'rgba(255,46,136,0.55)';
+    g.fillRect(S / 2 - 22, S / 2 - 3, 44, 6);
+  } else if (kind === 'hurdle') {
+    stripes('#ff2e88', '#1c0611', 22, 44);
+    const hi = g.createLinearGradient(0, 0, 0, S);
+    hi.addColorStop(0, 'rgba(255,255,255,0.28)');
+    hi.addColorStop(0.25, 'rgba(255,255,255,0)');
+    hi.addColorStop(1, 'rgba(0,0,0,0.35)');
+    g.fillStyle = hi;
+    g.fillRect(0, 0, S, S);
+  } else if (kind === 'mover') {
+    stripes('#ff8a3d', '#1f0c02', 22, 44);
+    g.fillStyle = 'rgba(0,0,0,0.45)';
+    g.fillRect(0, S * 0.32, S, S * 0.36);
+    // Double-headed arrows: "this one moves sideways".
+    g.fillStyle = '#ffe0c4';
+    const cy = S / 2;
+    g.beginPath();
+    g.moveTo(18, cy);
+    g.lineTo(40, cy - 16);
+    g.lineTo(40, cy + 16);
+    g.closePath();
+    g.moveTo(S - 18, cy);
+    g.lineTo(S - 40, cy - 16);
+    g.lineTo(S - 40, cy + 16);
+    g.closePath();
+    g.fill();
+    g.fillRect(40, cy - 4, S - 80, 8);
+  } else {
+    // Gate post: brushed violet metal with a light strip.
+    const grad = g.createLinearGradient(0, 0, S, 0);
+    grad.addColorStop(0, '#1d1342');
+    grad.addColorStop(0.5, '#4b33a0');
+    grad.addColorStop(1, '#1d1342');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, S, S);
+    g.fillStyle = 'rgba(0,0,0,0.35)';
+    for (let y = 0; y < S; y += 32) g.fillRect(0, y, S, 3);
+    g.fillStyle = '#e4d8ff';
+    g.fillRect(S / 2 - 7, 0, 14, S);
+  }
+  cache.set(key, c);
+  return c;
+}

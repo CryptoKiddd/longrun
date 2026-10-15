@@ -98,6 +98,30 @@ export class HUD {
       }
     }
 
+    // ---- dash readiness: fills while cooling, lights up when ready ----
+    if (hud.dash01 !== undefined) {
+      const dxp = bx + bw + 12;
+      const ready = hud.dash01 >= 1;
+      const dw = 62;
+      parallelogram(ctx, dxp, by, dw, bh, 8);
+      ctx.fillStyle = 'rgba(2,3,11,0.55)';
+      ctx.fill();
+      ctx.save();
+      parallelogram(ctx, dxp, by, dw, bh, 8);
+      ctx.clip();
+      ctx.fillStyle = ready ? PALETTE.rail : 'rgba(34,228,255,0.35)';
+      ctx.fillRect(dxp, by, dw * Math.max(0, Math.min(1, hud.dash01)), bh);
+      ctx.restore();
+      ctx.font = `800 11px ${FONT_DISPLAY}`;
+      ctx.textAlign = 'center';
+      ctx.fillStyle = ready ? '#021018' : '#9fb0e0';
+      ctx.fillText('DASH', dxp + dw / 2, by + 15);
+      ctx.font = `700 9px ${FONT_UI}`;
+      ctx.fillStyle = ready ? '#021018' : '#6f7fb0';
+      ctx.fillText(hud.dashKey || '', dxp + dw / 2, by + 25);
+      ctx.textAlign = 'left';
+    }
+
     // ---- distance + segmented speed meter ----
     const dSize = narrow ? 18 : 22;
     const dx = narrow ? pad : w / 2;
